@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>♠ 친구들과 홀덤</title>
+<link rel="stylesheet" href="/style.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>♠️</text></svg>" />
+</head>
+<body class="lobby-body">
+  <main class="lobby">
+    <header class="lobby-head">
+      <h1>♠️ 친구들과 홀덤</h1>
+      <p>방을 만들고 링크만 공유하면, 친구들이 동시에 접속해서 바로 게임을 시작합니다.</p>
+    </header>
+
+    <section class="panel">
+      <h2>방 만들기</h2>
+      <form id="create-form">
+        <div class="field">
+          <label for="room-name">방 이름</label>
+          <input id="room-name" type="text" maxlength="24" value="금요일 홀덤" />
+        </div>
+
+        <div class="grid2">
+          <div class="field">
+            <label for="bb">빅 블라인드 (BB)</label>
+            <input id="bb" type="number" min="2" step="1" value="100" required />
+          </div>
+          <div class="field">
+            <label for="sb">스몰 블라인드 (SB)</label>
+            <input id="sb" type="number" min="1" step="1" value="50" required />
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="stack">최초 스택 <span id="stack-bb" class="hint-inline"></span></label>
+          <input id="stack" type="number" min="1" step="1" value="10000" required />
+          <div class="chips-row" id="stack-presets">
+            <button type="button" data-bb="50">50BB</button>
+            <button type="button" data-bb="100">100BB</button>
+            <button type="button" data-bb="200">200BB</button>
+            <button type="button" data-bb="300">300BB</button>
+          </div>
+        </div>
+
+        <div class="grid2">
+          <div class="field">
+            <label for="max-players">최대 인원</label>
+            <select id="max-players">
+              <option>2</option><option>3</option><option>4</option><option>5</option>
+              <option>6</option><option>7</option><option>8</option><option selected>9</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="action-time">액션 제한시간</label>
+            <select id="action-time">
+              <option value="0">없음</option>
+              <option value="20">20초</option>
+              <option value="30">30초</option>
+              <option value="60" selected>60초</option>
+              <option value="120">120초</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="nickname">내 닉네임</label>
+          <input id="nickname" type="text" maxlength="14" placeholder="닉네임" required />
+        </div>
+
+        <button class="primary big" type="submit">방 만들고 입장하기</button>
+        <p class="error" id="create-error"></p>
+      </form>
+    </section>
+
+    <section class="panel">
+      <h2>방 코드로 참가</h2>
+      <form id="join-form">
+        <div class="grid2">
+          <div class="field">
+            <label for="join-code">방 코드</label>
+            <input id="join-code" type="text" maxlength="6" placeholder="ABC123" autocapitalize="characters" required />
+          </div>
+          <div class="field">
+            <label for="join-name">닉네임</label>
+            <input id="join-name" type="text" maxlength="14" placeholder="닉네임" required />
+          </div>
+        </div>
+        <button class="ghost big" type="submit">참가하기</button>
+        <p class="error" id="join-error"></p>
+      </form>
+    </section>
+
+    <section class="panel rules">
+      <h2>규칙 요약</h2>
+      <ul>
+        <li>텍사스 홀덤 노리밋. 방 만들 때 정한 <b>BB/SB</b>와 <b>최초 스택</b>으로 시작합니다.</li>
+        <li>카드는 매 핸드마다 <b>암호학적 난수(crypto)</b>로 셔플해 무작위 배분됩니다.</li>
+        <li>베팅 금액은 <b>BB 단위</b> 또는 <b>칩 금액</b> 중 편한 쪽으로 입력할 수 있습니다.</li>
+        <li>사이드 팟, 올인, 딜러 버튼 이동, 무승부 분배까지 자동으로 처리합니다.</li>
+      </ul>
+    </section>
+  </main>
+  <script src="/lobby.js"></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+{
+  "name": "poker-with-friends",
+  "version": "1.0.0",
+  "description": "링크 하나로 친구들과 함께 즐기는 실시간 텍사스 홀덤",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node test/engine.test.js"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.17.1"
+  },
+  "license": "MIT"
+}

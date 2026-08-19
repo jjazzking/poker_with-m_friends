@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>♠ 홀덤 테이블</title>
+<link rel="stylesheet" href="/style.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>♠️</text></svg>" />
+</head>
+<body class="room-body">
+
+<!-- 닉네임 입력 모달 -->
+<div class="modal" id="name-modal" hidden>
+  <form class="modal-card" id="name-form">
+    <h2>테이블 입장</h2>
+    <p class="muted" id="modal-info">방 정보를 불러오는 중…</p>
+    <input id="modal-name" type="text" maxlength="14" placeholder="닉네임" required />
+    <button class="primary big" type="submit">입장하기</button>
+  </form>
+</div>
+
+<header class="topbar">
+  <div class="topbar-left">
+    <span class="room-title" id="room-name">테이블</span>
+    <span class="badge" id="blind-badge">SB/BB</span>
+    <span class="badge" id="hand-badge">#0</span>
+  </div>
+  <div class="topbar-right">
+    <button class="ghost sm" id="copy-link">🔗 초대 링크 복사</button>
+    <button class="ghost sm" id="rebuy-btn">💰 칩 추가</button>
+    <button class="ghost sm" id="sitout-btn">자리 비우기</button>
+    <button class="ghost sm danger" id="leave-btn">나가기</button>
+  </div>
+</header>
+
+<main class="room">
+  <section class="table-wrap">
+    <div class="felt">
+      <div class="table-center">
+        <div class="pot-line"><span class="pot-label">POT</span> <span id="pot">0</span> <span class="pot-bb" id="pot-bb"></span></div>
+        <div class="board" id="board"></div>
+        <div class="street" id="street"></div>
+      </div>
+      <div id="seats"></div>
+    </div>
+
+    <div class="results" id="results" hidden></div>
+  </section>
+
+  <aside class="side">
+    <div class="side-head">
+      <h3>진행 기록</h3>
+      <label class="toggle-sm"><input type="checkbox" id="auto-next" checked /> 자동 진행</label>
+    </div>
+    <div class="log" id="log"></div>
+    <form class="chat" id="chat-form">
+      <input id="chat-input" type="text" maxlength="120" placeholder="메시지 입력…" />
+      <button class="ghost sm" type="submit">전송</button>
+    </form>
+  </aside>
+</main>
+
+<footer class="actionbar" id="actionbar">
+  <div class="waiting-bar" id="waiting-bar">
+    <span id="waiting-text">플레이어를 기다리는 중…</span>
+    <button class="primary" id="start-btn" hidden>게임 시작</button>
+  </div>
+
+  <div class="action-panel" id="action-panel" hidden>
+    <div class="timer-wrap"><div class="timer" id="timer"></div></div>
+
+    <div class="bet-controls">
+      <div class="unit-toggle" role="group" aria-label="베팅 단위">
+        <button type="button" class="active" id="unit-bb" data-unit="bb">BB 단위</button>
+        <button type="button" id="unit-chips" data-unit="chips">금액 단위</button>
+      </div>
+
+      <div class="bet-input-row">
+        <button type="button" class="step" id="bet-minus">−</button>
+        <input id="bet-input" type="number" step="1" inputmode="decimal" />
+        <span class="unit-label" id="unit-label">BB</span>
+        <button type="button" class="step" id="bet-plus">+</button>
+        <span class="convert" id="bet-convert"></span>
+      </div>
+
+      <input type="range" id="bet-slider" min="0" max="100" step="1" />
+
+      <div class="quick-row" id="quick-row">
+        <button type="button" data-quick="min">최소</button>
+        <button type="button" data-quick="2bb">2BB</button>
+        <button type="button" data-quick="3bb">3BB</button>
+        <button type="button" data-quick="half">1/2 팟</button>
+        <button type="button" data-quick="pot">팟</button>
+        <button type="button" data-quick="max">올인</button>
+      </div>
+    </div>
+
+    <div class="main-actions">
+      <button class="act fold" id="btn-fold">폴드</button>
+      <button class="act call" id="btn-call">콜</button>
+      <button class="act raise" id="btn-raise">레이즈</button>
+    </div>
+  </div>
+</footer>
+
+<div class="toast" id="toast" hidden></div>
+<script src="/room.js"></script>
+</body>
+</html>
