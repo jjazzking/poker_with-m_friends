@@ -739,8 +739,10 @@ class Table {
         isHost: p.token === this.hostToken,
         isMe: !!isMe,
         lastAction: p.lastAction,
-        handLabel: revealAll ? p.handLabel : isMe ? null : null,
+        handLabel: revealAll ? p.handLabel : null,
         cards: showCards ? p.cards.map(PokerLib.cardCode) : p.inHand ? ['??', '??'] : [],
+        // 쇼다운에서는 승자의 5장만 강조해 화면이 지저분해지지 않게 한다
+        bestCards: revealAll && !p.folded && p.won > 0 && p.bestCards ? p.bestCards : null,
         won: p.won,
       };
     });
@@ -777,6 +779,11 @@ class Table {
             isHost: viewer.token === this.hostToken,
             sittingOut: viewer.sittingOut,
             cards: viewer.cards.map(PokerLib.cardCode),
+            // 지금 내 손에 완성돼 있는 패 (프리플랍에는 홀카드 조합 설명)
+            hand:
+              viewer.inHand && !viewer.folded && viewer.cards.length
+                ? PokerLib.describeHand(viewer.cards, this.board)
+                : null,
           }
         : null,
       legal: viewer ? this.legalActionsFor(viewer) : null,

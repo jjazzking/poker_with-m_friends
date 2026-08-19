@@ -213,6 +213,13 @@ a { color: var(--accent); }
 .card .r { font-size: 20px; }
 .card .s { font-size: 16px; margin-top: 2px; }
 .card.red { color: #d8283c; }
+/* "10" 은 두 글자라 살짝 좁게 그린다 */
+.card.wide .r { font-size: 17px; letter-spacing: -1px; }
+/* 지금 내 패를 이루는 카드 */
+.card.hl {
+  box-shadow: 0 0 0 2px var(--gold), 0 3px 10px rgba(0, 0, 0, .4);
+  transform: translateY(-3px);
+}
 .card.back {
   background: repeating-linear-gradient(45deg, #2b4f8e, #2b4f8e 5px, #24427a 5px, #24427a 10px);
   border: 2px solid #dfe8f5;
@@ -235,6 +242,7 @@ a { color: var(--accent); }
 .seat-cards .card { width: 38px; height: 53px; }
 .seat-cards .card .r { font-size: 16px; }
 .seat-cards .card .s { font-size: 13px; }
+.seat-cards .card.wide .r { font-size: 13px; }
 
 .seat-info {
   background: rgba(9, 15, 20, .82);
@@ -353,6 +361,7 @@ a { color: var(--accent); }
 /* ------------------------------------------------------------- 액션 바 */
 
 .actionbar {
+  position: relative;
   border-top: 1px solid var(--line);
   background: var(--panel);
   padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
@@ -531,6 +540,136 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .fatal { text-align: center; padding: 80px 20px; }
 .fatal a { display: inline-block; max-width: 260px; text-decoration: none; }
 
+/* ------------------------------------------------------------- 애니메이션 */
+
+/* 카드 받기 — 테이블 중앙(딜러 자리)에서 자기 자리로 날아온다 */
+@keyframes card-deal {
+  from {
+    opacity: 0;
+    transform: translate(var(--dx, 0px), var(--dy, 0px)) scale(.55) rotate(-14deg);
+  }
+  70% { opacity: 1; }
+  to { opacity: 1; transform: translate(0, 0) scale(1) rotate(0); }
+}
+.card.dealing { animation: card-deal .46s cubic-bezier(.22, .8, .28, 1) backwards; }
+
+/* 카드 열기 — 보드 오픈과 쇼다운 공개에 쓴다 */
+@keyframes card-flip {
+  0% { opacity: .25; transform: perspective(420px) rotateY(88deg) scale(.92); }
+  60% { opacity: 1; transform: perspective(420px) rotateY(-10deg) scale(1.04); }
+  100% { opacity: 1; transform: perspective(420px) rotateY(0) scale(1); }
+}
+.card.flipping { animation: card-flip .5s ease-out backwards; }
+
+/* 베팅 칩이 테이블 쪽으로 튀어나온다 */
+@keyframes bet-pop {
+  from { opacity: 0; transform: translateX(-50%) scale(.6); }
+  60% { opacity: 1; transform: translateX(-50%) scale(1.12); }
+  to { opacity: 1; transform: translateX(-50%) scale(1); }
+}
+.seat-bet.pop { animation: bet-pop .34s ease-out backwards; }
+
+/* 액션 말풍선 */
+@keyframes action-pop {
+  from { opacity: 0; transform: translateY(6px) scale(.9); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.seat-action.pop { animation: action-pop .28s ease-out backwards; }
+
+/* 팟 증가 */
+@keyframes pot-bump {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.22); color: var(--gold); }
+  100% { transform: scale(1); }
+}
+#pot { display: inline-block; }
+#pot.bump { animation: pot-bump .42s ease-out; }
+
+/* 스택 증감 */
+@keyframes stack-up {
+  0% { color: var(--accent); transform: translateY(3px); }
+  100% { color: var(--gold); transform: translateY(0); }
+}
+@keyframes stack-down {
+  0% { color: var(--red); transform: translateY(-3px); }
+  100% { color: var(--gold); transform: translateY(0); }
+}
+.seat-stack.up { animation: stack-up .5s ease-out; }
+.seat-stack.down { animation: stack-down .5s ease-out; }
+
+/* 차례인 사람 / 승자 */
+@keyframes acting-glow {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(240, 194, 75, .3), 0 0 16px rgba(240, 194, 75, .25); }
+  50% { box-shadow: 0 0 0 3px rgba(240, 194, 75, .55), 0 0 28px rgba(240, 194, 75, .5); }
+}
+.seat.acting .seat-info { animation: acting-glow 1.4s ease-in-out infinite; }
+
+@keyframes winner-pulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 2px rgba(53, 196, 107, .4), 0 0 22px rgba(53, 196, 107, .35); }
+  50% { transform: scale(1.06); box-shadow: 0 0 0 3px rgba(53, 196, 107, .7), 0 0 34px rgba(53, 196, 107, .6); }
+}
+.seat.winner .seat-info { animation: winner-pulse 1.1s ease-in-out infinite; }
+
+/* 폴드 / 좌석 상태 변화는 부드럽게 */
+.seat { transition: opacity .28s ease; }
+.card { transition: box-shadow .25s ease, transform .25s ease; }
+.results { animation: action-pop .3s ease-out backwards; }
+
+/* ------------------------------------------------------------- 내 패 표시 */
+
+.myhand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 7px 12px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+.myhand.made { border-color: rgba(240, 194, 75, .5); }
+.myhand-tag {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.myhand-name { font-weight: 800; color: var(--gold); letter-spacing: .2px; }
+.myhand.made .myhand-name { color: var(--accent); }
+.myhand-detail { color: var(--muted); font-size: 12px; }
+.myhand-cards { display: inline-flex; gap: 4px; margin-left: auto; }
+.myhand-cards .mini {
+  background: #fbfdff;
+  color: #16202a;
+  border-radius: 4px;
+  padding: 2px 5px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+.myhand-cards .mini.red { color: #d8283c; }
+.myhand-cards .mini.key { box-shadow: 0 0 0 2px var(--gold); }
+
+@keyframes hand-changed {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.16); }
+  100% { transform: scale(1); }
+}
+.myhand-name { display: inline-block; }
+.myhand-name.changed { animation: hand-changed .4s ease-out; }
+
+/* 애니메이션을 원치 않는 사용자 설정 존중 */
+@media (prefers-reduced-motion: reduce) {
+  .card.dealing, .card.flipping, .seat-bet.pop, .seat-action.pop,
+  #pot.bump, .seat-stack.up, .seat-stack.down, .myhand-name.changed,
+  .seat.acting .seat-info, .seat.winner .seat-info, .results {
+    animation: none !important;
+  }
+}
+
 /* ------------------------------------------------------------- 반응형 */
 
 @media (max-width: 900px) {
@@ -549,6 +688,10 @@ button:disabled { opacity: .45; cursor: not-allowed; }
   .board .card { width: 34px; height: 48px; }
   .board .card .r { font-size: 16px; }
   .board .card .s { font-size: 13px; }
+  .board .card.wide .r { font-size: 13px; }
+  .seat-cards .card.wide .r { font-size: 10px; }
+  .myhand { font-size: 12px; padding: 5px 8px; }
+  .myhand-cards .mini { font-size: 11px; padding: 1px 4px; }
   .board { gap: 4px; }
   .seat-hand { font-size: 10px; }
   .action-panel { flex-direction: column; align-items: stretch; }

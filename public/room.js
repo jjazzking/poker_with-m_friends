@@ -15,6 +15,26 @@ let betChips = 0; // 항상 "칩 기준 레이즈 목표 금액"으로 보관
 let reconnectDelay = 500;
 let timerRAF = null;
 
+// 카드가 "확" 나타나지 않도록, 무엇이 새로 등장했는지 기억해 두고 그때만 애니메이션을 준다
+const anim = {
+  handNo: null,
+  boardShown: 0,
+  faces: new Map(), // `${seat}:${i}` -> 카드 코드 ('??' 이면 아직 뒷면)
+  bets: new Map(), // seat -> 마지막으로 그린 베팅액
+  stacks: new Map(), // seat -> 마지막으로 그린 스택
+  actions: new Map(), // seat -> 마지막으로 그린 액션 문구
+  pot: 0,
+};
+
+function resetAnim() {
+  anim.boardShown = 0;
+  anim.faces.clear();
+  anim.bets.clear();
+  anim.stacks.clear();
+  anim.actions.clear();
+  anim.pot = 0;
+}
+
 /* ------------------------------------------------------------- 유틸 */
 
 const fmt = (n) => Math.round(Number(n) || 0).toLocaleString('ko-KR');
@@ -136,21 +156,45 @@ function notifyMyTurn() {
 
 /* ------------------------------------------------------------- 렌더 */
 
-function cardEl(code) {
+function cardEl(code, opts = {}) {
   const el = document.createElement('div');
   if (!code || code === '??') {
     el.className = 'card back';
-    return el;
+  } else {
+    const suit = code.slice(-1);
+    const rank = code.slice(0, -1);
+    el.className = 'card' + (suit === 'h' || suit === 'd' ? ' red' : '') + (rank.length > 1 ? ' wide' : '');
+    el.innerHTML = `<span class="r">${rank}</span><span class="s">${SUIT_SYMBOL[suit] || ''}</span>`;
   }
-  const suit = code.slice(-1);
-  const rank = code.slice(0, -1);
-  el.className = 'card' + (suit === 'h' || suit === 'd' ? ' red' : '');
-  el.innerHTML = `<span class="r">${rank}</span><span class="s">${SUIT_SYMBOL[suit] || ''}</span>`;
+  if (opts.highlight) el.classList.add('hl');
+  if (opts.anim) {
+    el.classList.add(opts.anim); // dealing | flipping
+    if (opts.delay) el.style.animationDelay = opts.delay + 'ms';
+    if (opts.from) {
+      el.style.setProperty('--dx', opts.from.x.toFixed(0) + 'px');
+      el.style.setProperty('--dy', opts.from.y.toFixed(0) + 'px');
+    }
+  }
   return el;
+}
+
+/** 이번 렌더에서 이 카드에 붙일 애니메이션을 정한다 (처음 받음 / 뒤집힘 / 없음) */
+function cardAnim(key, code) {
+  const prev = anim.faces.get(key);
+  anim.faces.set(key, code);
+  if (prev === undefined) return 'dealing';
+  if (prev === '??' && code !== '??') return 'flipping';
+  return null;
 }
 
 function render() {
   if (!state) return;
+
+  // 새 핸드가 시작되면 애니메이션 기준을 처음부터 다시 잡는다
+  if (state.handNo !== anim.handNo || state.board.length < anim.boardShown) {
+    anim.handNo = state.handNo;
+    resetAnim();
+  }
 
   $('#room-name').textContent = state.room.name;
   $('#blind-badge').textContent = `SB ${fmt(state.room.smallBlind)} / BB ${fmt(state.room.bigBlind)}`;
@@ -158,25 +202,98 @@ function render() {
   // P2P 모드에서는 방장 탭이 곧 서버라서, 닫으면 방이 사라진다는 것을 알려 준다
   $('#host-badge').hidden = !(Net.mode === 'p2p' && Net.isHost);
 
-  $('#pot').textContent = fmt(state.pot);
+  const potEl = $('#pot');
+  potEl.textContent = fmt(state.pot);
   $('#pot-bb').textContent = state.pot ? `(${toBB(state.pot)} BB)` : '';
+  if (state.pot > anim.pot) replay(potEl, 'bump');
+  anim.pot = state.pot;
+
   $('#street').textContent = state.status === 'playing' ? STREET_LABEL[state.street] || '' : '';
 
+  renderBoard();
+  renderSeats();
+  renderMyHand();
+  renderResults();
+  renderLog();
+  renderActions();
+}
+
+/** 같은 요소에 애니메이션을 다시 재생시킨다 (클래스만 다시 붙이면 브라우저가 무시하므로 리플로우를 끼운다) */
+function replay(el, cls) {
+  el.classList.remove(cls);
+  void el.offsetWidth;
+  el.classList.add(cls);
+}
+
+/** 지금 내 족보를 만드는 카드들 (키커 제외) */
+function myKeySet() {
+  const hand = state.you && state.you.hand;
+  if (!hand || !hand.key || !hand.key.length) return null;
+  return new Set(hand.key);
+}
+
+/** 보드에서 강조할 카드 — 진행 중에는 내 족보, 쇼다운에는 승자의 5장 */
+function boardHighlightSet() {
+  if (state.status === 'showdown') {
+    const winners = state.players.filter((p) => p.bestCards);
+    if (winners.length) return new Set(winners.flatMap((p) => p.bestCards));
+    return null;
+  }
+  return myKeySet();
+}
+
+function renderBoard() {
   const board = $('#board');
+  const best = boardHighlightSet();
   board.innerHTML = '';
   for (let i = 0; i < 5; i++) {
-    if (state.board[i]) board.appendChild(cardEl(state.board[i]));
-    else {
+    const code = state.board[i];
+    if (code) {
+      // 이번에 새로 깔린 카드만 한 장씩 순서대로 뒤집는다
+      const isNew = i >= anim.boardShown;
+      board.appendChild(
+        cardEl(code, {
+          highlight: best ? best.has(code) : false,
+          anim: isNew ? 'flipping' : null,
+          delay: isNew ? (i - anim.boardShown) * 160 : 0,
+        })
+      );
+    } else {
       const ph = document.createElement('div');
       ph.className = 'card placeholder';
       board.appendChild(ph);
     }
   }
+  anim.boardShown = state.board.length;
+}
 
-  renderSeats();
-  renderResults();
-  renderLog();
-  renderActions();
+/** 지금 완성돼 있는 내 패를 액션바 위에 실시간으로 보여 준다 */
+function renderMyHand() {
+  const box = $('#myhand');
+  const hand = state.you && state.you.hand;
+  if (!hand) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  box.classList.toggle('made', !!hand.made);
+
+  const nameEl = $('#myhand-name');
+  if (nameEl.textContent !== hand.name) replay(nameEl, 'changed');
+  nameEl.textContent = hand.name;
+  $('#myhand-detail').textContent = hand.detail || '';
+
+  const cards = $('#myhand-cards');
+  const keySet = new Set(hand.key || []);
+  cards.innerHTML = '';
+  for (const code of hand.cards) {
+    const suit = code.slice(-1);
+    const mini = document.createElement('span');
+    mini.className =
+      'mini' + (suit === 'h' || suit === 'd' ? ' red' : '') + (keySet.has(code) ? ' key' : '');
+    mini.textContent = code.slice(0, -1) + (SUIT_SYMBOL[suit] || '');
+    cards.appendChild(mini);
+  }
 }
 
 function renderSeats() {
@@ -191,6 +308,12 @@ function renderSeats() {
   const narrow = window.innerWidth < 900;
   const rx = narrow ? 40 : 40;
   const ry = narrow ? 41 : 38;
+
+  // 카드가 테이블 한가운데(딜러 자리)에서 날아오도록, 좌석마다 중앙까지의 거리를 px 로 구해 둔다
+  const felt = document.querySelector('.felt');
+  const fw = felt ? felt.clientWidth : 0;
+  const fh = felt ? felt.clientHeight : 0;
+  const myKey = myKeySet();
 
   wrap.innerHTML = '';
   ordered.forEach((p, i) => {
@@ -213,13 +336,34 @@ function renderSeats() {
 
     const cards = document.createElement('div');
     cards.className = 'seat-cards';
-    (p.cards.length ? p.cards : []).forEach((c) => cards.appendChild(cardEl(c)));
+    const from = { x: ((50 - x) / 100) * fw, y: ((46 - y) / 100) * fh };
+    p.cards.forEach((c, ci) => {
+      const motion = cardAnim(`${p.seat}:${ci}`, c);
+      // 쇼다운에서 공개되는 상대 카드는 뒤집히고, 새로 받는 카드는 테이블 중앙에서 날아온다
+      const highlight = p.bestCards
+        ? p.bestCards.includes(c)
+        : p.isMe && myKey
+        ? myKey.has(c)
+        : false;
+      cards.appendChild(
+        cardEl(c, {
+          highlight,
+          anim: motion,
+          from: motion === 'dealing' ? from : null,
+          delay: motion === 'dealing' ? i * 90 + ci * 45 : ci * 130,
+        })
+      );
+    });
+
+    const prevStack = anim.stacks.get(p.seat);
+    const stackMove = prevStack === undefined || prevStack === p.stack ? '' : p.stack > prevStack ? ' up' : ' down';
+    anim.stacks.set(p.seat, p.stack);
 
     const info = document.createElement('div');
     info.className = 'seat-info';
     info.innerHTML = `
       <div class="seat-name">${p.seat === state.buttonSeat ? '<span class="dealer">D</span>' : ''}${escapeHtml(p.name)}${p.isHost ? ' 👑' : ''}</div>
-      <div class="seat-stack">${fmt(p.stack)} <span class="sbb">(${toBB(p.stack)}BB)</span></div>
+      <div class="seat-stack${stackMove}">${fmt(p.stack)} <span class="sbb">(${toBB(p.stack)}BB)</span></div>
       ${p.handLabel ? `<div class="seat-hand">${p.handLabel}</div>` : ''}
       ${p.sittingOut ? '<div class="seat-tag">자리비움</div>' : ''}
       ${!p.connected ? '<div class="seat-tag off">연결끊김</div>' : ''}
@@ -231,15 +375,22 @@ function renderSeats() {
     if (p.lastAction) {
       const act = document.createElement('div');
       act.className = 'seat-action';
+      if (anim.actions.get(p.seat) !== p.lastAction) act.classList.add('pop');
       act.textContent = p.lastAction;
       seat.appendChild(act);
     }
+    anim.actions.set(p.seat, p.lastAction);
+
     if (p.bet > 0) {
       const bet = document.createElement('div');
       bet.className = 'seat-bet';
+      // 칩이 늘어난 순간에만 튀어 오르게 한다
+      if (p.bet > (anim.bets.get(p.seat) || 0)) bet.classList.add('pop');
       bet.innerHTML = `<span class="chip"></span>${fmt(p.bet)}`;
       seat.appendChild(bet);
     }
+    anim.bets.set(p.seat, p.bet);
+
     wrap.appendChild(seat);
   });
 }

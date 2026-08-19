@@ -21,7 +21,7 @@ function randomInt(max) {
 const SUITS = ['s', 'h', 'd', 'c'];
 const RANK_LABEL = {
   2: '2', 3: '3', 4: '4', 5: '5', 6: '6', 7: '7', 8: '8',
-  9: '9', 10: 'T', 11: 'J', 12: 'Q', 13: 'K', 14: 'A',
+  9: '9', 10: '10', 11: 'J', 12: 'Q', 13: 'K', 14: 'A',
 };
 
 const CATEGORY_NAMES = [
@@ -145,6 +145,82 @@ function handName(score) {
   return CATEGORY_NAMES[score.cat];
 }
 
+const L = (r) => RANK_LABEL[r] || String(r);
+
+/** 족보 이름 뒤에 붙는 한 줄 설명 ("A 페어", "K 하이 플러시" 등) */
+function handDetail(score) {
+  const tb = score.tb || [];
+  switch (score.cat) {
+    case 8: return score.tb[0] === 14 ? '' : `${L(tb[0])} 하이`;
+    case 7: return `${L(tb[0])} 포카드`;
+    case 6: return `${L(tb[0])} 풀 ${L(tb[1])}`;
+    case 5: return `${L(tb[0])} 하이`;
+    case 4: return `${L(tb[0])} 하이`;
+    case 3: return `${L(tb[0])} 트리플`;
+    case 2: return `${L(tb[0])} · ${L(tb[1])}`;
+    case 1: return `${L(tb[0])} 페어`;
+    default: return `${L(tb[0])} 하이`;
+  }
+}
+
+/** 보드가 깔리기 전(프리플랍) 홀카드 두 장을 설명한다. */
+function preflopDetail(hole) {
+  if (hole.length < 2) return '';
+  const [a, b] = [...hole].sort((x, y) => y.r - x.r);
+  if (a.r === b.r) return `포켓 ${L(a.r)}`;
+  const suited = a.s === b.s ? '수딧' : '오프수트';
+  const gap = a.r - b.r;
+  const connector = gap === 1 ? ' 커넥터' : '';
+  return `${L(a.r)}${L(b.r)} ${suited}${connector}`;
+}
+
+/**
+ * 최고의 5장 중 실제로 족보를 만드는 카드들 (키커는 제외).
+ * 하이카드는 강조할 카드가 없으므로 빈 배열.
+ */
+function keyCards(score) {
+  const tb = score.tb || [];
+  const byRank = (ranks) => score.cards.filter((c) => ranks.includes(c.r));
+  switch (score.cat) {
+    case 0: return [];
+    case 1: return byRank([tb[0]]);
+    case 2: return byRank([tb[0], tb[1]]);
+    case 3: return byRank([tb[0]]);
+    case 7: return byRank([tb[0]]);
+    default: return score.cards.slice(); // 스트레이트 · 플러시 · 풀하우스 · SF 는 5장 전부
+  }
+}
+
+/**
+ * 지금 이 순간 내가 "완성한" 패를 설명한다.
+ * 보드가 3장 이상이면 최고의 5장을, 프리플랍이면 홀카드 조합을 알려 준다.
+ * @returns {{name:string, detail:string, cards:string[], made:boolean}|null}
+ */
+function describeHand(hole, board) {
+  const holeCards = hole || [];
+  const boardCards = board || [];
+  if (holeCards.length < 2) return null;
+
+  const all = [...holeCards, ...boardCards];
+  if (all.length < 5) {
+    return {
+      name: '프리플랍',
+      detail: preflopDetail(holeCards),
+      cards: holeCards.map(cardCode),
+      key: holeCards[0].r === holeCards[1].r ? holeCards.map(cardCode) : [],
+      made: false,
+    };
+  }
+  const best = evaluateBest(all);
+  return {
+    name: best.name,
+    detail: handDetail(best),
+    cards: best.cards.map(cardCode),
+    key: keyCards(best).map(cardCode),
+    made: true,
+  };
+}
+
 const API = {
   randomInt,
   SUITS,
@@ -158,6 +234,10 @@ const API = {
   evaluateBest,
   compareHands,
   handName,
+  handDetail,
+  keyCards,
+  preflopDetail,
+  describeHand,
 };
 
 if (typeof module !== 'undefined' && module.exports) module.exports = API;

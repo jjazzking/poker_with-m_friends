@@ -5,7 +5,13 @@
  */
 const assert = require('assert');
 const { Table } = require('../src/table');
-const { evaluateBest, compareHands, newShuffledDeck, cardCode } = require('../src/poker');
+const {
+  evaluateBest,
+  compareHands,
+  newShuffledDeck,
+  cardCode,
+  describeHand,
+} = require('../src/poker');
 
 let passed = 0;
 function test(name, fn) {
@@ -80,6 +86,39 @@ test('플러시는 스트레이트보다 강하다', () => {
   const flush = hand('2s', '5s', '9s', 'Js', 'Ks', '3h', '4d');
   const straight = hand('5h', '6d', '7c', '8s', '9h', '2c', '3d');
   assert.ok(compareHands(flush, straight) > 0);
+});
+
+console.log('\n실시간 내 패 안내');
+
+test('10 은 T 가 아니라 10 으로 표기된다', () => {
+  assert.strictEqual(cardCode(C('Th')), '10h');
+  assert.strictEqual(cardCode(C('Ah')), 'Ah');
+});
+test('프리플랍에는 홀카드 조합을 알려 준다', () => {
+  const d = describeHand([C('As'), C('Ks')], []);
+  assert.strictEqual(d.made, false);
+  assert.strictEqual(d.detail, 'AK 수딧 커넥터');
+  assert.strictEqual(describeHand([C('9s'), C('9d')], []).detail, '포켓 9');
+});
+test('보드가 깔리면 지금 완성된 족보를 알려 준다', () => {
+  const d = describeHand([C('As'), C('Kd')], [C('Ah'), C('7c'), C('2d')]);
+  assert.strictEqual(d.made, true);
+  assert.strictEqual(d.name, '원페어');
+  assert.strictEqual(d.detail, 'A 페어');
+  assert.strictEqual(d.cards.length, 5);
+});
+test('족보를 만드는 카드만 강조 대상으로 준다 (키커 제외)', () => {
+  const pair = describeHand([C('As'), C('Kd')], [C('Ah'), C('7c'), C('2d')]);
+  assert.deepStrictEqual(pair.key.sort(), ['Ah', 'As']);
+  const high = describeHand([C('As'), C('Kd')], [C('9h'), C('7c'), C('2d')]);
+  assert.deepStrictEqual(high.key, []);
+  const flush = describeHand([C('9d'), C('6d')], [C('Ad'), C('8d'), C('Qd')]);
+  assert.strictEqual(flush.key.length, 5);
+});
+test('턴·리버까지 6~7장에서도 최고의 5장을 고른다', () => {
+  const d = describeHand([C('Ts'), C('Js')], [C('Qs'), C('Ks'), C('As'), C('2h'), C('3d')]);
+  assert.strictEqual(d.name, '로열 플러시');
+  assert.deepStrictEqual(d.cards.sort(), ['10s', 'As', 'Js', 'Ks', 'Qs']);
 });
 
 console.log('\n덱 / 셔플');
