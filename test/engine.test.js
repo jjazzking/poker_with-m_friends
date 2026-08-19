@@ -29,7 +29,10 @@ async function testAsync(name, fn) {
   }
 }
 
-const C = (s) => ({ r: { T: 10, J: 11, Q: 12, K: 13, A: 14 }[s[0]] || Number(s[0]), s: s[1] });
+const C = (s) => ({
+  r: { T: 10, J: 11, Q: 12, K: 13, A: 14 }[s[0]] || (s.startsWith('10') ? 10 : Number(s[0])),
+  s: s.slice(-1),
+});
 const hand = (...codes) => evaluateBest(codes.map(C));
 
 function makeTable(overrides = {}) {
@@ -80,6 +83,15 @@ test('플러시는 스트레이트보다 강하다', () => {
   const flush = hand('2s', '5s', '9s', 'Js', 'Ks', '3h', '4d');
   const straight = hand('5h', '6d', '7c', '8s', '9h', '2c', '3d');
   assert.ok(compareHands(flush, straight) > 0);
+});
+
+test('10 은 T 가 아니라 10 으로 표기된다', () => {
+  assert.strictEqual(cardCode(C('10h')), '10h');
+  assert.strictEqual(cardCode(C('Ah')), 'Ah');
+  // 화면에서 랭크/무늬를 잘라 쓰는 방식이 두 글자 랭크에서도 맞아야 한다
+  const code = cardCode(C('10s'));
+  assert.strictEqual(code.slice(-1), 's');
+  assert.strictEqual(code.slice(0, -1), '10');
 });
 
 console.log('\n덱 / 셔플');
@@ -199,6 +211,69 @@ test('차례가 아니면 액션할 수 없다', () => {
   t.startHand();
   const notActor = t.seatedPlayers().find((p) => p.seat !== t.actorSeat);
   assert.throws(() => t.act(notActor.token, 'call'), /차례/);
+});
+
+console.log('\n실시간 내 패 표시');
+
+test('프리플랍에는 홀카드 조합을 알려 준다', () => {
+  const t = makeTable();
+  t.addPlayer('t1', 'A');
+  t.addPlayer('t2', 'B');
+  t.startHand();
+  const p = t.players.get('t1');
+
+  p.cards = [C('As'), C('Ad')];
+  assert.strictEqual(t.madeHandFor(p).name, '포켓 페어 (AA)');
+
+  p.cards = [C('As'), C('Ks')];
+  assert.strictEqual(t.madeHandFor(p).name, 'A 하이 (수티드)');
+
+  p.cards = [C('As'), C('Kd')];
+  assert.strictEqual(t.madeHandFor(p).name, 'A 하이 (오프숫)');
+});
+
+test('플랍 이후에는 완성된 족보와 사용된 5장을 알려 준다', () => {
+  const t = makeTable();
+  t.addPlayer('t1', 'A');
+  t.addPlayer('t2', 'B');
+  t.startHand();
+  const p = t.players.get('t1');
+  p.cards = [C('As'), C('Ks')];
+
+  t.board = [C('Ah'), C('Kc'), C('7d')];
+  const flop = t.madeHandFor(p);
+  assert.strictEqual(flop.name, '투페어');
+  assert.strictEqual(flop.cards.length, 5);
+  assert.ok(flop.cards.includes('As') && flop.cards.includes('Ah'), '사용된 카드가 표시되어야 한다');
+
+  t.board.push(C('Ac'));
+  assert.strictEqual(t.madeHandFor(p).name, '풀하우스');
+});
+
+test('내 패는 나에게만 내려간다', () => {
+  const t = makeTable();
+  t.addPlayer('t1', 'A');
+  t.addPlayer('t2', 'B');
+  t.startHand();
+
+  const mine = t.publicState('t1');
+  assert.ok(mine.you.made, '본인 상태에는 완성된 패가 들어 있어야 한다');
+  // 다른 사람 정보에는 카드도 족보도 없다
+  const other = mine.players.find((x) => !x.isMe);
+  assert.deepStrictEqual(other.cards, ['??', '??']);
+  assert.strictEqual(other.handLabel, null);
+});
+
+test('폴드했거나 핸드에 없으면 표시하지 않는다', () => {
+  const t = makeTable();
+  t.addPlayer('t1', 'A');
+  t.addPlayer('t2', 'B');
+  t.addPlayer('t3', 'C');
+  t.startHand();
+  const p = t.players.get('t1');
+  p.folded = true;
+  assert.strictEqual(t.madeHandFor(p), null);
+  assert.strictEqual(t.publicState('t1').you.made, null);
 });
 
 console.log('\n팟 정산');

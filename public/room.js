@@ -15,6 +15,31 @@ let betChips = 0; // 항상 "칩 기준 레이즈 목표 금액"으로 보관
 let reconnectDelay = 500;
 let timerRAF = null;
 
+/** 내 패를 이루는 카드(하이라이트용) */
+let usedCards = new Set();
+
+/**
+ * 애니메이션은 "새로 나타난 카드"에만 걸어야 한다.
+ * 상태가 올 때마다 화면을 다시 그리므로, 이미 보여 준 카드를 기억해 둔다.
+ */
+const anim = {
+  handNo: null,
+  boardShown: 0,
+  dealt: new Set(),    // 홀카드를 이미 받은 플레이어
+  revealed: new Set(), // 쇼다운에서 이미 공개된 플레이어
+  actions: new Map(),  // 플레이어별 마지막 액션 문구
+  pot: 0,
+};
+
+function resetAnim(handNo) {
+  anim.handNo = handNo;
+  anim.boardShown = 0;
+  anim.dealt.clear();
+  anim.revealed.clear();
+  anim.actions.clear();
+  anim.pot = 0;
+}
+
 /* ------------------------------------------------------------- 유틸 */
 
 const fmt = (n) => Math.round(Number(n) || 0).toLocaleString('ko-KR');
@@ -143,14 +168,32 @@ function cardEl(code) {
     return el;
   }
   const suit = code.slice(-1);
-  const rank = code.slice(0, -1);
-  el.className = 'card' + (suit === 'h' || suit === 'd' ? ' red' : '');
+  const rank = code.slice(0, -1); // '10' 처럼 두 글자일 수 있다
+  el.className =
+    'card' +
+    (suit === 'h' || suit === 'd' ? ' red' : '') +
+    (rank.length > 1 ? ' wide-rank' : '') +
+    (usedCards.has(code) ? ' used' : '');
   el.innerHTML = `<span class="r">${rank}</span><span class="s">${SUIT_SYMBOL[suit] || ''}</span>`;
   return el;
 }
 
+/** 카드가 딜러(테이블 중앙)에서 날아오는 방향을 CSS 변수로 넘겨 준다 */
+function setDealOrigin(el, xPercent, yPercent, delayMs) {
+  const felt = $('.felt');
+  const w = felt ? felt.clientWidth : 600;
+  const h = felt ? felt.clientHeight : 400;
+  el.style.setProperty('--dx', ((50 - xPercent) / 100) * w + 'px');
+  el.style.setProperty('--dy', ((46 - yPercent) / 100) * h + 'px');
+  el.style.animationDelay = delayMs + 'ms';
+  el.classList.add('dealing');
+}
+
 function render() {
   if (!state) return;
+
+  if (anim.handNo !== state.handNo || (!state.board.length && anim.boardShown)) resetAnim(state.handNo);
+  usedCards = new Set(state.you && state.you.made ? state.you.made.cards : []);
 
   $('#room-name').textContent = state.room.name;
   $('#blind-badge').textContent = `SB ${fmt(state.room.smallBlind)} / BB ${fmt(state.room.bigBlind)}`;
@@ -158,25 +201,59 @@ function render() {
   // P2P 모드에서는 방장 탭이 곧 서버라서, 닫으면 방이 사라진다는 것을 알려 준다
   $('#host-badge').hidden = !(Net.mode === 'p2p' && Net.isHost);
 
-  $('#pot').textContent = fmt(state.pot);
+  const potEl = $('#pot');
+  potEl.textContent = fmt(state.pot);
   $('#pot-bb').textContent = state.pot ? `(${toBB(state.pot)} BB)` : '';
+  if (state.pot > anim.pot) {
+    potEl.classList.remove('bump');
+    void potEl.offsetWidth; // 애니메이션 재시작
+    potEl.classList.add('bump');
+  }
+  anim.pot = state.pot;
   $('#street').textContent = state.status === 'playing' ? STREET_LABEL[state.street] || '' : '';
 
   const board = $('#board');
   board.innerHTML = '';
   for (let i = 0; i < 5; i++) {
-    if (state.board[i]) board.appendChild(cardEl(state.board[i]));
-    else {
+    if (state.board[i]) {
+      const el = cardEl(state.board[i]);
+      // 이번에 새로 깔린 카드만 뒤집히는 연출
+      if (i >= anim.boardShown) {
+        el.classList.add('flipping');
+        el.style.animationDelay = (i - anim.boardShown) * 160 + 'ms';
+      }
+      board.appendChild(el);
+    } else {
       const ph = document.createElement('div');
       ph.className = 'card placeholder';
       board.appendChild(ph);
     }
   }
+  anim.boardShown = state.board.length;
 
   renderSeats();
   renderResults();
+  renderMadeHand();
   renderLog();
   renderActions();
+}
+
+function renderMadeHand() {
+  const el = $('#made-hand');
+  const made = state.you && state.you.made;
+  if (!made || state.status === 'waiting') {
+    el.hidden = true;
+    return;
+  }
+  el.hidden = false;
+  $('#mh-name').textContent = made.name;
+  $('#mh-cards').innerHTML = made.cards
+    .map((c) => {
+      const suit = c.slice(-1);
+      const red = suit === 'h' || suit === 'd';
+      return `<span class="mh-card${red ? ' red' : ''}">${escapeHtml(c.slice(0, -1))}${SUIT_SYMBOL[suit] || ''}</span>`;
+    })
+    .join('');
 }
 
 function renderSeats() {
@@ -213,7 +290,25 @@ function renderSeats() {
 
     const cards = document.createElement('div');
     cards.className = 'seat-cards';
-    (p.cards.length ? p.cards : []).forEach((c) => cards.appendChild(cardEl(c)));
+
+    const hasCards = p.cards.length > 0;
+    const faceUp = hasCards && p.cards[0] !== '??';
+    // 이번 핸드에서 처음 받는 카드인지 / 쇼다운에서 처음 공개되는 카드인지
+    const isNewDeal = hasCards && !anim.dealt.has(p.id);
+    const isNewReveal = faceUp && !p.isMe && !anim.revealed.has(p.id) && !isNewDeal;
+
+    p.cards.forEach((c, ci) => {
+      const el = cardEl(c);
+      if (isNewDeal) setDealOrigin(el, x, y, i * 90 + ci * 110);
+      else if (isNewReveal) {
+        el.classList.add('flipping');
+        el.style.animationDelay = ci * 120 + 'ms';
+      }
+      cards.appendChild(el);
+    });
+
+    if (isNewDeal) anim.dealt.add(p.id);
+    if (faceUp && !p.isMe) anim.revealed.add(p.id);
 
     const info = document.createElement('div');
     info.className = 'seat-info';
@@ -231,9 +326,12 @@ function renderSeats() {
     if (p.lastAction) {
       const act = document.createElement('div');
       act.className = 'seat-action';
+      // 방금 바뀐 액션만 살짝 튀어나오게
+      if (anim.actions.get(p.id) !== p.lastAction) act.classList.add('pop');
       act.textContent = p.lastAction;
       seat.appendChild(act);
     }
+    anim.actions.set(p.id, p.lastAction);
     if (p.bet > 0) {
       const bet = document.createElement('div');
       bet.className = 'seat-bet';

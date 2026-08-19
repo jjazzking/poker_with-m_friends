@@ -717,6 +717,33 @@ class Table {
     };
   }
 
+  /**
+   * 보는 사람 본인의 "지금 완성된 패"를 계산한다.
+   * 플랍 이후에는 홀카드+보드 7장 중 최고 5장을, 프리플랍에는 홀카드 조합을 알려 준다.
+   */
+  madeHandFor(player) {
+    if (!player || !player.inHand || player.folded || player.cards.length < 2) return null;
+
+    if (this.board.length < 3) {
+      const [a, b] = player.cards;
+      const label = PokerLib.RANK_LABEL;
+      if (a.r === b.r) {
+        return { name: `포켓 페어 (${label[a.r]}${label[a.r]})`, cards: player.cards.map(PokerLib.cardCode) };
+      }
+      const hi = a.r > b.r ? a : b;
+      return { name: `${label[hi.r]} 하이 (${a.s === b.s ? '수티드' : '오프숫'})`, cards: [] };
+    }
+
+    const best = PokerLib.evaluateBest([...player.cards, ...this.board]);
+    // 페어부터 보이도록 (같은 랭크 묶음 크기 → 랭크) 순으로 정렬해서 읽기 쉽게 만든다
+    const counts = new Map();
+    for (const c of best.cards) counts.set(c.r, (counts.get(c.r) || 0) + 1);
+    const ordered = [...best.cards].sort(
+      (x, y) => counts.get(y.r) - counts.get(x.r) || y.r - x.r
+    );
+    return { name: best.name, cards: ordered.map(PokerLib.cardCode) };
+  }
+
   publicState(viewerToken) {
     const viewer = this.players.get(viewerToken) || null;
     const revealAll = this.status === 'showdown' && this.results && this.results.showdown;
@@ -777,6 +804,7 @@ class Table {
             isHost: viewer.token === this.hostToken,
             sittingOut: viewer.sittingOut,
             cards: viewer.cards.map(PokerLib.cardCode),
+            made: this.madeHandFor(viewer),
           }
         : null,
       legal: viewer ? this.legalActionsFor(viewer) : null,

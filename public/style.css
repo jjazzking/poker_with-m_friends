@@ -223,6 +223,46 @@ a { color: var(--accent); }
   border: 1px dashed rgba(255, 255, 255, .16);
 }
 
+/* 카드 애니메이션 — 딜러(테이블 중앙)에서 날아오고, 커뮤니티 카드는 뒤집히며 열린다 */
+@keyframes dealIn {
+  from { transform: translate(var(--dx, 0), var(--dy, 0)) scale(.55) rotate(-10deg); opacity: 0; }
+  to   { transform: translate(0, 0) scale(1) rotate(0); opacity: 1; }
+}
+.card.dealing { animation: dealIn .48s cubic-bezier(.2, .75, .3, 1) backwards; }
+
+@keyframes flipIn {
+  0%   { transform: perspective(700px) rotateY(92deg) scale(.92); opacity: 0; }
+  55%  { transform: perspective(700px) rotateY(-10deg) scale(1.04); opacity: 1; }
+  100% { transform: none; opacity: 1; }
+}
+.card.flipping { animation: flipIn .5s ease-out backwards; }
+
+@keyframes actionPop {
+  from { transform: scale(.7); opacity: 0; }
+  60%  { transform: scale(1.06); opacity: 1; }
+  to   { transform: scale(1); opacity: 1; }
+}
+.seat-action.pop { animation: actionPop .28s ease-out; }
+
+@keyframes potBump {
+  0%   { transform: scale(1); }
+  35%  { transform: scale(1.16); }
+  100% { transform: scale(1); }
+}
+#pot { display: inline-block; }
+#pot.bump { animation: potBump .42s ease-out; }
+
+/* 두 글자 랭크(10)는 폭에 맞춰 살짝 줄인다 */
+.card.wide-rank .r { font-size: 17px; letter-spacing: -1.5px; }
+.seat-cards .card.wide-rank .r { font-size: 13px; letter-spacing: -1px; }
+
+/* 지금 내 패를 이루는 카드 */
+.card.used { box-shadow: 0 0 0 2px var(--accent), 0 3px 10px rgba(0, 0, 0, .4); }
+
+@media (prefers-reduced-motion: reduce) {
+  .card.dealing, .card.flipping, .seat-action.pop, #pot.bump { animation: none !important; }
+}
+
 /* 좌석 */
 .seat {
   position: absolute;
@@ -360,6 +400,36 @@ a { color: var(--accent); }
   overflow-y: auto;
   flex-shrink: 0;
 }
+
+.made-hand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  font-size: 13.5px;
+}
+.made-hand b { color: var(--accent); }
+.mh-label {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: .5px;
+}
+.mh-cards { display: flex; gap: 4px; flex-wrap: wrap; }
+.mh-card {
+  background: #fbfdff;
+  color: #16202a;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 12px;
+  font-weight: 800;
+}
+.mh-card.red { color: #d8283c; }
 
 .waiting-bar {
   display: flex;
@@ -535,6 +605,19 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 
 @media (max-width: 900px) {
   .room { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
+
+  /* 좁은 화면에서 상단 버튼이 여러 줄로 늘어지지 않도록 */
+  .topbar { padding: 7px 10px; gap: 6px; }
+  .topbar-left, .topbar-right { gap: 5px; }
+  .room-title { font-size: 13px; }
+  .badge { font-size: 10.5px; padding: 2px 7px; }
+  .sm { padding: 5px 8px; font-size: 11px; }
+
+  /* 팟 표시가 위쪽 좌석의 베팅 칩과 겹치지 않도록 보드 아래로 내린다 */
+  .table-center { display: flex; flex-direction: column; }
+  .board { order: 1; }
+  .pot-line { order: 2; margin: 8px 0 0; }
+  .street { order: 3; margin-top: 4px; }
   .side { border-left: none; border-top: 1px solid var(--line); height: 140px; }
   .log { font-size: 12px; }
   .table-wrap { padding: 10px; }
@@ -548,6 +631,8 @@ button:disabled { opacity: .45; cursor: not-allowed; }
   .seat-cards .card .s { font-size: 10px; }
   .board .card { width: 34px; height: 48px; }
   .board .card .r { font-size: 16px; }
+  .board .card.wide-rank .r { font-size: 14px; }
+  .seat-cards .card.wide-rank .r { font-size: 11px; }
   .board .card .s { font-size: 13px; }
   .board { gap: 4px; }
   .seat-hand { font-size: 10px; }
