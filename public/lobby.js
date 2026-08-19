@@ -55,21 +55,15 @@ $('#create-form').addEventListener('submit', async (e) => {
   localStorage.setItem(NAME_KEY, name);
 
   try {
-    const res = await fetch('/api/rooms', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: $('#room-name').value.trim() || '친구들과 홀덤',
-        bigBlind: bb,
-        smallBlind: sb,
-        startingStack: stack,
-        maxPlayers: Number($('#max-players').value),
-        actionTime: Number($('#action-time').value),
-      }),
+    const { roomId } = await Net.createRoom({
+      name: $('#room-name').value.trim() || '친구들과 홀덤',
+      bigBlind: bb,
+      smallBlind: sb,
+      startingStack: stack,
+      maxPlayers: Number($('#max-players').value),
+      actionTime: Number($('#action-time').value),
     });
-    if (!res.ok) throw new Error('방 생성에 실패했습니다');
-    const data = await res.json();
-    location.href = `/room/${data.roomId}`;
+    location.href = roomUrl(roomId);
   } catch (e2) {
     err.textContent = e2.message;
   }
@@ -85,9 +79,17 @@ $('#join-form').addEventListener('submit', async (e) => {
   if (!code) return (err.textContent = '방 코드를 입력해 주세요.');
   if (!name) return (err.textContent = '닉네임을 입력해 주세요.');
 
-  const res = await fetch(`/api/rooms/${code}`);
-  if (!res.ok) return (err.textContent = '그런 방이 없습니다. 코드를 확인해 주세요.');
+  // 서버 모드에서는 미리 방 존재를 확인할 수 있고, P2P 모드에서는 접속해 봐야 알 수 있다
+  if (Net.mode === 'server') {
+    const info = await Net.roomInfo(code);
+    if (!info) return (err.textContent = '그런 방이 없습니다. 코드를 확인해 주세요.');
+  }
 
   localStorage.setItem(NAME_KEY, name);
-  location.href = `/room/${code}`;
+  location.href = roomUrl(code);
 });
+
+/** 현재 배포 위치를 유지한 채 테이블 주소를 만든다 (?mode=p2p 같은 옵션도 함께 유지) */
+function roomUrl(code) {
+  return new URL(`room.html${location.search}#${code}`, location.href).href;
+}

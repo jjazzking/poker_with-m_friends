@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const { Table } = require('./table');
+const { handleClientMessage } = require('./protocol');
 
 const PORT = process.env.PORT || 3000;
 const ROOM_TTL_MS = 1000 * 60 * 60 * 6; // 6시간 동안 활동이 없으면 방 정리
@@ -90,8 +91,13 @@ app.get('/api/rooms/:id', (req, res) => {
 
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-app.get('/room/:id', (_req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'public', 'room.html'));
+// P2P 모드(정적 배포와 동일한 구성)를 로컬에서도 그대로 테스트할 수 있도록 함께 서빙한다
+app.use('/engine', express.static(__dirname));
+app.use('/vendor', express.static(path.join(__dirname, '..', 'node_modules', 'peerjs', 'dist')));
+
+// 예전 링크(/room/CODE) 호환 — 실제 방 주소는 해시 기반이라 정적 호스팅에서도 동작한다
+app.get('/room/:id', (req, res) => {
+  res.redirect(302, `/room.html#${encodeURIComponent(String(req.params.id).toUpperCase())}`);
 });
 
 const server = http.createServer(app);
@@ -162,59 +168,19 @@ function handleMessage(ws, msg) {
 
   const table = rooms.get(ws.roomId);
   if (!table || !ws.playerToken) throw new Error('먼저 방에 입장해 주세요');
-  const me = table.players.get(ws.playerToken);
-  if (!me) throw new Error('플레이어 정보를 찾을 수 없습니다');
 
-  switch (msg.type) {
-    case 'action':
-      table.act(ws.playerToken, msg.action, msg.amount);
-      break;
+  const result = handleClientMessage({
+    table,
+    token: ws.playerToken,
+    msg,
+    reply: (payload) => send(ws, payload),
+  });
 
-    case 'start':
-      if (table.hostToken !== ws.playerToken) throw new Error('방장만 게임을 시작할 수 있습니다');
-      if (table.status !== 'waiting') throw new Error('이미 게임이 진행 중입니다');
-      table.startHand();
-      break;
-
-    case 'sitout':
-      table.setSitOut(ws.playerToken, msg.value);
-      break;
-
-    case 'addChips':
-      if (table.hostToken !== ws.playerToken && msg.target && msg.target !== ws.playerToken) {
-        throw new Error('권한이 없습니다');
-      }
-      table.addChips(ws.playerToken, msg.amount);
-      break;
-
-    case 'autoNext':
-      if (table.hostToken !== ws.playerToken) throw new Error('방장만 변경할 수 있습니다');
-      table.autoNext = !!msg.value;
-      table.pushLog(`자동 다음 핸드: ${table.autoNext ? '켜짐' : '꺼짐'}`);
-      table.touch();
-      break;
-
-    case 'chat': {
-      const text = String(msg.text || '').trim().slice(0, 120);
-      if (!text) break;
-      table.pushLog(`💬 ${me.name}: ${text}`);
-      table.touch();
-      break;
-    }
-
-    case 'leave':
-      table.removePlayer(ws.playerToken);
-      sockets.get(ws.roomId).delete(ws);
-      ws.playerToken = null;
-      broadcast(table.id);
-      break;
-
-    case 'ping':
-      send(ws, { type: 'pong' });
-      break;
-
-    default:
-      throw new Error('알 수 없는 요청입니다');
+  if (result.left) {
+    const set = sockets.get(ws.roomId);
+    if (set) set.delete(ws);
+    ws.playerToken = null;
+    broadcast(table.id);
   }
 }
 

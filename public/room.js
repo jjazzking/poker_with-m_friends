@@ -1,14 +1,14 @@
 'use strict';
 
 const $ = (s) => document.querySelector(s);
-const ROOM_ID = decodeURIComponent(location.pathname.split('/').pop() || '').toUpperCase();
+// 정적 호스팅(GitHub Pages)에서도 동작하도록 방 코드는 해시로 전달한다: room.html#ABC123
+const ROOM_ID = decodeURIComponent((location.hash || '').replace(/^#\/?(room\/)?/, '')).toUpperCase();
 const NAME_KEY = 'poker:name';
 const TOKEN_KEY = `poker:token:${ROOM_ID}`;
 
 const SUIT_SYMBOL = { s: '♠', h: '♥', d: '♦', c: '♣' };
 const STREET_LABEL = { preflop: '프리플랍', flop: '플랍', turn: '턴', river: '리버' };
 
-let ws = null;
 let state = null;
 let unit = localStorage.getItem('poker:unit') || 'bb';
 let betChips = 0; // 항상 "칩 기준 레이즈 목표 금액"으로 보관
@@ -44,29 +44,33 @@ function getToken() {
 }
 
 function sendMsg(obj) {
-  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+  Net.send(obj);
 }
 
 /* ------------------------------------------------------------- 입장 */
 
 async function boot() {
-  const res = await fetch(`/api/rooms/${ROOM_ID}`);
-  if (!res.ok) {
-    document.body.innerHTML =
-      '<div class="fatal"><h1>방을 찾을 수 없습니다</h1><p>링크가 만료되었거나 잘못된 코드입니다.</p><a class="primary big" href="/">새 방 만들기</a></div>';
-    return;
+  if (!ROOM_ID) return fatal('방 코드가 없습니다', '초대 링크를 다시 확인해 주세요.');
+
+  const info = await Net.roomInfo(ROOM_ID).catch(() => null);
+  // 서버 모드에서는 방 정보를 미리 알 수 있고, P2P 참가자는 방장에게 붙어야 알 수 있다
+  if (!info && Net.mode === 'server') {
+    return fatal('방을 찾을 수 없습니다', '링크가 만료되었거나 잘못된 코드입니다.');
   }
-  const info = await res.json();
-  $('#room-name').textContent = info.config.name;
-  $('#blind-badge').textContent = `SB ${fmt(info.config.smallBlind)} / BB ${fmt(info.config.bigBlind)}`;
+
+  if (info) {
+    $('#room-name').textContent = info.config.name;
+    $('#blind-badge').textContent = `SB ${fmt(info.config.smallBlind)} / BB ${fmt(info.config.bigBlind)}`;
+  }
 
   const name = localStorage.getItem(NAME_KEY);
   if (name) return connect(name);
 
   const modal = $('#name-modal');
   modal.hidden = false;
-  $('#modal-info').textContent =
-    `${info.config.name} · SB ${fmt(info.config.smallBlind)} / BB ${fmt(info.config.bigBlind)} · 시작 스택 ${fmt(info.config.startingStack)}`;
+  $('#modal-info').textContent = info
+    ? `${info.config.name} · SB ${fmt(info.config.smallBlind)} / BB ${fmt(info.config.bigBlind)} · 시작 스택 ${fmt(info.config.startingStack)}`
+    : `방 코드 ${ROOM_ID} · 입장하면 방장이 정한 블라인드와 스택이 표시됩니다.`;
   $('#modal-name').focus();
   $('#name-form').addEventListener('submit', (e) => {
     e.preventDefault();
@@ -78,34 +82,40 @@ async function boot() {
   });
 }
 
+function fatal(title, detail) {
+  document.body.innerHTML =
+    `<div class="fatal"><h1>${escapeHtml(title)}</h1><p>${escapeHtml(detail)}</p>` +
+    `<a class="primary big" href="${new URL('index.html' + location.search, location.href).href}">새 방 만들기</a></div>`;
+}
+
 function connect(name) {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws`);
-
-  ws.addEventListener('open', () => {
-    reconnectDelay = 500;
-    sendMsg({ type: 'join', roomId: ROOM_ID, token: getToken(), name });
-  });
-
-  ws.addEventListener('message', (ev) => {
-    const msg = JSON.parse(ev.data);
-    if (msg.type === 'state') {
-      const prevActor = state?.actorSeat;
-      state = msg;
-      render();
-      if (state.legal && prevActor !== state.actorSeat) notifyMyTurn();
-    } else if (msg.type === 'error') {
-      toast(msg.message, true);
-    } else if (msg.type === 'fatal') {
-      toast(msg.message, true);
-      setTimeout(() => (location.href = '/'), 1500);
-    }
-  });
-
-  ws.addEventListener('close', () => {
-    toast('연결이 끊겼습니다. 다시 연결 중…', true);
-    setTimeout(() => connect(name), reconnectDelay);
-    reconnectDelay = Math.min(reconnectDelay * 2, 8000);
+  $('#connecting').hidden = false;
+  Net.join({
+    roomId: ROOM_ID,
+    name,
+    token: getToken(),
+    handlers: {
+      onState(msg) {
+        $('#connecting').hidden = true;
+        const prevActor = state ? state.actorSeat : undefined;
+        state = msg;
+        render();
+        if (state.legal && prevActor !== state.actorSeat) notifyMyTurn();
+      },
+      onError(message) {
+        toast(message, true);
+      },
+      onFatal(message) {
+        toast(message, true);
+        setTimeout(() => fatal('연결이 끊겼습니다', message), 1200);
+      },
+      onDisconnect() {
+        toast('연결이 끊겼습니다. 다시 연결 중…', true);
+      },
+      onHostReady() {
+        toast('방이 열렸습니다. 초대 링크를 친구에게 보내세요!');
+      },
+    },
   });
 }
 
@@ -145,6 +155,8 @@ function render() {
   $('#room-name').textContent = state.room.name;
   $('#blind-badge').textContent = `SB ${fmt(state.room.smallBlind)} / BB ${fmt(state.room.bigBlind)}`;
   $('#hand-badge').textContent = `#${state.handNo}`;
+  // P2P 모드에서는 방장 탭이 곧 서버라서, 닫으면 방이 사라진다는 것을 알려 준다
+  $('#host-badge').hidden = !(Net.mode === 'p2p' && Net.isHost);
 
   $('#pot').textContent = fmt(state.pot);
   $('#pot-bb').textContent = state.pot ? `(${toBB(state.pot)} BB)` : '';
@@ -475,13 +487,16 @@ $('#rebuy-btn').addEventListener('click', () => {
 });
 
 $('#leave-btn').addEventListener('click', () => {
-  if (!confirm('테이블에서 나가시겠습니까?')) return;
+  const warning = Net.isHost
+    ? '방장이 나가면 방이 닫히고 모두의 게임이 종료됩니다. 나가시겠습니까?'
+    : '테이블에서 나가시겠습니까?';
+  if (!confirm(warning)) return;
   sendMsg({ type: 'leave' });
-  setTimeout(() => (location.href = '/'), 200);
+  setTimeout(() => (location.href = new URL('index.html' + location.search, location.href).href), 200);
 });
 
 $('#copy-link').addEventListener('click', async () => {
-  const url = `${location.origin}/room/${ROOM_ID}`;
+  const url = location.href.split('#')[0] + '#' + ROOM_ID;
   try {
     await navigator.clipboard.writeText(url);
     toast('초대 링크를 복사했습니다: ' + url);

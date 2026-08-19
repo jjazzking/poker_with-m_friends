@@ -1,5 +1,22 @@
 'use strict';
-const crypto = require('crypto');
+/**
+ * 덱 · 셔플 · 핸드 평가.
+ * Node(서버 모드)와 브라우저(GitHub Pages P2P 모드) 양쪽에서 그대로 쓰인다.
+ */
+const nodeCrypto = typeof require === 'function' ? require('crypto') : null;
+
+/** 0 이상 max 미만의 편향 없는 난수 (Node: crypto, 브라우저: WebCrypto) */
+function randomInt(max) {
+  if (nodeCrypto) return nodeCrypto.randomInt(max);
+  const limit = Math.floor(0x100000000 / max) * max;
+  const buf = new Uint32Array(1);
+  let v;
+  do {
+    globalThis.crypto.getRandomValues(buf);
+    v = buf[0];
+  } while (v >= limit);
+  return v % max;
+}
 
 const SUITS = ['s', 'h', 'd', 'c'];
 const RANK_LABEL = {
@@ -27,7 +44,7 @@ function makeDeck() {
  */
 function shuffle(deck) {
   for (let i = deck.length - 1; i > 0; i--) {
-    const j = crypto.randomInt(i + 1);
+    const j = randomInt(i + 1);
     [deck[i], deck[j]] = [deck[j], deck[i]];
   }
   return deck;
@@ -128,7 +145,8 @@ function handName(score) {
   return CATEGORY_NAMES[score.cat];
 }
 
-module.exports = {
+const API = {
+  randomInt,
   SUITS,
   RANK_LABEL,
   CATEGORY_NAMES,
@@ -141,3 +159,6 @@ module.exports = {
   compareHands,
   handName,
 };
+
+if (typeof module !== 'undefined' && module.exports) module.exports = API;
+else globalThis.Poker = API;

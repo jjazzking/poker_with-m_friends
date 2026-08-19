@@ -1,18 +1,62 @@
 # ♠️ 친구들과 홀덤 (Poker with Friends)
 
 링크 하나만 공유하면 친구들이 **동시에 접속해서** 실시간으로 텍사스 홀덤을 칠 수 있는 웹사이트입니다.
-서버는 Node.js + WebSocket, 클라이언트는 별도 빌드 없는 순수 HTML/CSS/JS로 되어 있습니다.
+화면은 별도 빌드가 필요 없는 순수 HTML/CSS/JS 이고,
+**서버 없이 GitHub Pages 에 올리는 방식(WebRTC P2P)** 과 **Node 서버 방식(WebSocket)** 을 모두 지원합니다.
 
 ## 요청한 기능
 
 | 요구사항 | 구현 |
 | --- | --- |
-| 링크로 동시 접속 | 방을 만들면 `/room/<6자리 코드>` 링크가 생기고, 접속자 전원이 WebSocket으로 실시간 동기화됩니다. |
+| 링크로 동시 접속 | 방을 만들면 `room.html#<6자리 코드>` 링크가 생기고, 접속자 전원의 화면이 실시간으로 동기화됩니다(정적 배포는 WebRTC, 서버 배포는 WebSocket). |
 | BB 금액 / 최초 스택을 방 만들 때 결정 | 로비의 "방 만들기"에서 BB·SB·최초 스택(50/100/200/300BB 프리셋 포함)·최대 인원·액션 제한시간을 지정합니다. |
 | 베팅 금액을 BB 기준 / 금액 기준 모두 지원 | 액션 바의 `BB 단위 ↔ 금액 단위` 토글. 입력값은 실시간으로 서로 환산되어 표시되고, 슬라이더·퀵버튼(최소·2BB·3BB·1/2팟·팟·올인)도 함께 동작합니다. |
-| 카드 랜덤 배분 | 매 핸드마다 52장 덱을 `crypto.randomInt` 기반 Fisher–Yates로 셔플합니다. 홀카드는 본인에게만 전송되고, 다른 사람 화면에는 뒷면으로만 내려갑니다. |
+| 카드 랜덤 배분 | 매 핸드마다 52장 덱을 암호학적 난수(Node `crypto.randomInt` / 브라우저 WebCrypto) 기반 Fisher–Yates 로 셔플합니다. 홀카드는 본인에게만 전송되고, 다른 사람 화면에는 뒷면으로만 내려갑니다. |
 
-## 실행 방법
+## 두 가지 배포 방식
+
+이 저장소는 같은 게임을 **두 가지 방식**으로 돌릴 수 있습니다. 게임 엔진(`src/poker.js`, `src/table.js`, `src/protocol.js`)은 양쪽이 그대로 공유합니다.
+
+| | GitHub Pages (P2P) | Node 서버 |
+| --- | --- | --- |
+| 호스팅 | 정적 파일만 — 서버 비용 0 | Node 프로세스 필요 |
+| 연결 | 방장 브라우저 ↔ 참가자 **WebRTC 직접 연결** | 모두가 서버에 WebSocket 연결 |
+| 게임 진행 | 방장 탭이 딜러 역할 (탭을 열어 둬야 함) | 서버가 딜러 역할 |
+| 실행 | `npm run build` → Pages 배포 | `npm start` |
+
+### 1) GitHub Pages 로 배포하기 (서버 없이)
+
+GitHub Pages 는 정적 파일만 서빙하므로 Node 서버를 띄울 수 없습니다. 그래서 Pages 빌드에서는
+**방장 브라우저가 서버 역할**을 하고, 참가자들이 WebRTC(P2P)로 방장에게 직접 붙습니다.
+카드 셔플·베팅 판정·팟 정산은 모두 방장 탭에서 돌아가고, 각자의 홀카드는 본인에게만 전송됩니다.
+
+1. 이 브랜치를 GitHub 에 올립니다(이미 푸시되어 있습니다).
+2. 저장소 **Settings → Pages → Build and deployment → Source** 를 **GitHub Actions** 로 바꿉니다.
+3. 끝입니다. `.github/workflows/pages.yml` 이 푸시될 때마다 테스트 → 빌드 → 배포를 수행합니다.
+   (`main` 으로 합친 뒤에는 워크플로의 브랜치 목록에서 작업 브랜치 줄을 지워도 됩니다.)
+4. 배포 주소 `https://<사용자>.github.io/<저장소>/` 에서 방을 만들고, **🔗 초대 링크 복사**로 나온
+   `.../room.html#ABC123` 링크를 친구에게 보내면 됩니다.
+
+로컬에서 배포본을 먼저 확인하려면:
+
+```bash
+npm install
+npm run preview      # dist/ 빌드 후 http://localhost:4000 에서 정적 서빙
+```
+
+**P2P 모드에서 알아 둘 점**
+
+- 방장은 게임이 끝날 때까지 탭을 열어 두어야 합니다. 탭을 닫으면 방이 사라집니다.
+  (방장이 새로고침하는 정도는 괜찮습니다 — 같은 코드로 다시 열리고 각자 스택도 복원됩니다.)
+- 방장과 참가자를 서로 찾아 주는 **시그널링 서버**로 PeerJS 공개 서버(0.peerjs.com)를 씁니다.
+  직접 운영하려면 `npx peerjs --port 9000 --path /pkr` 로 띄운 뒤,
+  `scripts/build-static.js` 가 생성하는 `config.js` 의 `peerServer` 에 주소를 적어 주세요.
+  (연결이 맺어진 다음의 카드·베팅 데이터는 시그널링 서버를 거치지 않고 브라우저끼리 직접 오갑니다.)
+- 딜링을 방장 브라우저가 하므로, 마음먹은 방장은 이론적으로 카드를 들여다볼 수 있습니다.
+  친구들끼리 노는 용도로는 충분하지만, 그게 신경 쓰인다면 아래 Node 서버 방식을 쓰세요.
+- 회사망처럼 UDP 를 막는 환경에서는 WebRTC 연결이 안 될 수 있습니다(이때도 Node 서버 방식은 동작합니다).
+
+### 2) Node 서버로 돌리기
 
 ```bash
 npm install
@@ -32,7 +76,8 @@ npx localtunnel --port 3000        # 또는 ngrok http 3000
 docker build -t poker . && docker run -p 3000:3000 poker
 ```
 
-Render·Railway·Fly.io 같은 PaaS에도 그대로 올라갑니다(`PORT` 환경변수를 읽습니다). WebSocket을 지원하는 호스팅이면 됩니다.
+Render·Railway·Fly.io 같은 PaaS 에도 그대로 올라갑니다(`PORT` 환경변수를 읽습니다). WebSocket 을 지원하는 호스팅이면 됩니다.
+`npm start` 로 띄운 서버에서 `?mode=p2p` 를 붙이면(예: `http://localhost:3000/?mode=p2p`) P2P 모드도 그대로 시험해 볼 수 있습니다.
 
 ## 게임 규칙 / 구현 범위
 
@@ -57,17 +102,26 @@ Render·Railway·Fly.io 같은 PaaS에도 그대로 올라갑니다(`PORT` 환�
 ## 프로젝트 구조
 
 ```
-src/poker.js    52장 덱, 암호학적 셔플, 5~7장 핸드 평가기
-src/table.js    테이블 상태 머신 (블라인드·베팅 라운드·사이드 팟·쇼다운)
-src/server.js   Express 정적 서빙 + 방 API + WebSocket 브로드캐스트
-public/         로비(index) · 테이블(room) 화면과 스타일
-test/           엔진 단위 테스트 + 랜덤 봇 시뮬레이션
+src/poker.js       52장 덱, 암호학적 셔플, 5~7장 핸드 평가기
+src/table.js       테이블 상태 머신 (블라인드·베팅 라운드·사이드 팟·쇼다운)
+src/protocol.js    클라이언트 메시지 처리 규칙 (서버 모드와 P2P 모드가 공유)
+src/server.js      Express 정적 서빙 + 방 API + WebSocket 브로드캐스트
+public/net.js      전송 계층 — WebSocket / WebRTC(P2P) 를 같은 인터페이스로 감싼다
+public/            로비(index) · 테이블(room) 화면과 스타일
+scripts/           정적 빌드 및 미리보기
+test/              엔진 단위 테스트 + 랜덤 봇 시뮬레이션
+.github/workflows/ GitHub Pages 자동 배포
 ```
 
-### 통신 규약 (WebSocket `/ws`)
+`src/` 의 엔진 세 파일은 Node 와 브라우저 양쪽에서 그대로 동작하도록 작성되어 있어서
+(난수는 Node `crypto` / WebCrypto 를 알아서 골라 씁니다), 서버 모드와 P2P 모드가 **완전히 같은 게임 로직**을 씁니다.
 
-클라이언트 → 서버: `join` · `action`(fold/check/call/raise/allin) · `start` · `sitout` · `addChips` · `autoNext` · `chat` · `leave`
-서버 → 클라이언트: `joined` · `state`(요청자 시점으로 홀카드를 가린 전체 상태) · `error` · `fatal`
+### 통신 규약
+
+전송 수단(WebSocket `/ws` 또는 WebRTC 데이터 채널)과 무관하게 메시지는 동일합니다.
+
+참가자 → 딜러(서버 또는 방장): `join` · `action`(fold/check/call/raise/allin) · `start` · `sitout` · `addChips` · `autoNext` · `chat` · `leave`
+딜러 → 참가자: `joined` · `state`(받는 사람 시점으로 남의 홀카드를 가린 전체 상태) · `error` · `fatal`
 
 ## 테스트
 
@@ -81,10 +135,11 @@ npm test
 - 사이드 팟 및 스플릿 정산
 - **랜덤 봇 5명이 300핸드**를 돌리며 칩 총량 보존·음수 스택 없음·규칙 위반 없음 확인
 
-브라우저 3~7개를 동시에 띄워 실제 동시 접속·카드 비공개·BB/금액 전환·쇼다운·재접속까지 확인하는
-Playwright E2E 시나리오로도 검증했습니다.
+브라우저 여러 개를 실제로 띄워서 두 모드를 모두 검증했습니다 — 동시 접속, 홀카드 비공개,
+BB/금액 단위 전환, 쇼다운 공개, 새로고침 재접속, P2P 방장 새로고침 후 스택 복원까지.
 
 ## 참고
 
-방 데이터는 서버 메모리에만 저장되며, 아무도 접속하지 않은 상태로 6시간이 지나면 정리됩니다.
+방 데이터는 어디에도 영구 저장되지 않습니다. 서버 모드에서는 서버 메모리에만 두고 아무도 접속하지 않은 상태로
+6시간이 지나면 정리하며, P2P 모드에서는 방장 탭이 닫히는 순간 사라집니다.
 실제 돈이 오가지 않는, 친구들끼리 즐기는 용도입니다.

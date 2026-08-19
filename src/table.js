@@ -1,5 +1,10 @@
 'use strict';
-const { newShuffledDeck, evaluateBest, compareHands, cardCode } = require('./poker');
+/**
+ * 테이블(한 방)의 게임 상태 머신.
+ * 서버 모드에서는 Node 프로세스가, GitHub Pages P2P 모드에서는 호스트 브라우저가 이 코드를 돌린다.
+ */
+// 브라우저에서는 모든 스크립트가 같은 전역 스코프를 공유하므로 이름을 풀어 두지 않는다
+const PokerLib = typeof require === 'function' ? require('./poker') : globalThis.Poker;
 
 const MAX_SEATS = 9;
 const SHOWDOWN_DELAY = 6000;
@@ -57,23 +62,13 @@ class Table {
     return -1;
   }
 
-  addPlayer(token, name) {
-    const existing = this.players.get(token);
-    if (existing) {
-      existing.connected = true;
-      existing.name = name || existing.name;
-      this.touch();
-      return existing;
-    }
-    const seat = this.freeSeat();
-    if (seat < 0) throw new Error('자리가 가득 찼습니다 (최대 ' + this.config.maxPlayers + '명)');
-
-    const player = {
+  makePlayer(token, name, seat, stack) {
+    return {
       id: 'P' + nextPlayerId++,
       token,
       name: (name || '플레이어').slice(0, 14),
       seat,
-      stack: this.config.startingStack,
+      stack,
       connected: true,
       sittingOut: false,
       // 핸드 단위 상태
@@ -88,11 +83,59 @@ class Table {
       handLabel: null,
       won: 0,
     };
+  }
+
+  addPlayer(token, name) {
+    const existing = this.players.get(token);
+    if (existing) {
+      existing.connected = true;
+      existing.name = name || existing.name;
+      this.touch();
+      return existing;
+    }
+    const seat = this.freeSeat();
+    if (seat < 0) throw new Error('자리가 가득 찼습니다 (최대 ' + this.config.maxPlayers + '명)');
+
+    const player = this.makePlayer(token, name, seat, this.config.startingStack);
     this.players.set(token, player);
     if (!this.hostToken) this.hostToken = token;
     this.pushLog(`${player.name} 님이 입장했습니다.`);
     this.touch();
     return player;
+  }
+
+  /**
+   * 호스트 브라우저가 새로고침돼도 스택이 날아가지 않도록 저장/복원한다.
+   * (P2P 모드에서 호스트 탭이 곧 서버이므로 필요하다)
+   */
+  snapshot() {
+    return {
+      handNo: this.handNo,
+      buttonSeat: this.buttonSeat,
+      hostToken: this.hostToken,
+      players: this.seatedPlayers().map((p) => ({
+        token: p.token,
+        name: p.name,
+        seat: p.seat,
+        stack: p.stack,
+        sittingOut: p.sittingOut,
+      })),
+    };
+  }
+
+  restore(snap) {
+    if (!snap || !Array.isArray(snap.players)) return;
+    for (const s of snap.players) {
+      if (this.players.has(s.token) || s.seat >= this.config.maxPlayers) continue;
+      const p = this.makePlayer(s.token, s.name, s.seat, Math.max(0, Math.floor(s.stack) || 0));
+      p.connected = false; // 실제로 다시 붙을 때까지는 끊긴 상태로 둔다
+      p.sittingOut = !!s.sittingOut;
+      this.players.set(s.token, p);
+    }
+    this.handNo = Number(snap.handNo) || 0;
+    this.buttonSeat = typeof snap.buttonSeat === 'number' ? snap.buttonSeat : null;
+    if (snap.hostToken && this.players.has(snap.hostToken)) this.hostToken = snap.hostToken;
+    this.pushLog('이전 테이블 상태를 복원했습니다.');
   }
 
   removePlayer(token) {
@@ -236,7 +279,7 @@ class Table {
     this.street = 'preflop';
     this.board = [];
     this.results = null;
-    this.deck = newShuffledDeck();
+    this.deck = PokerLib.newShuffledDeck();
     this.currentBet = 0;
     this.minRaise = this.config.bigBlind;
 
@@ -503,7 +546,7 @@ class Table {
     const nextName = { preflop: 'flop', flop: 'turn', turn: 'river' }[this.street];
     this.street = nextName;
     this.dealBoard(nextName === 'flop' ? 3 : 1);
-    this.pushLog(`[${{ flop: '플랍', turn: '턴', river: '리버' }[nextName]}] ${this.board.map(cardCode).join(' ')}`);
+    this.pushLog(`[${{ flop: '플랍', turn: '턴', river: '리버' }[nextName]}] ${this.board.map(PokerLib.cardCode).join(' ')}`);
 
     const active = this.playersInHand();
     const canAct = active.filter((p) => !p.allIn);
@@ -568,10 +611,10 @@ class Table {
     const active = this.playersInHand();
     const scores = new Map();
     for (const p of active) {
-      const best = evaluateBest([...p.cards, ...this.board]);
+      const best = PokerLib.evaluateBest([...p.cards, ...this.board]);
       scores.set(p.id, best);
       p.handLabel = best.name;
-      p.bestCards = best.cards.map(cardCode);
+      p.bestCards = best.cards.map(PokerLib.cardCode);
     }
 
     const pots = this.buildPots();
@@ -583,7 +626,7 @@ class Table {
       for (const p of contenders) {
         const sc = scores.get(p.id);
         if (!sc) continue;
-        const cmp = best ? compareHands(sc, best) : 1;
+        const cmp = best ? PokerLib.compareHands(sc, best) : 1;
         if (cmp > 0) {
           best = sc;
           winners = [p];
@@ -697,7 +740,7 @@ class Table {
         isMe: !!isMe,
         lastAction: p.lastAction,
         handLabel: revealAll ? p.handLabel : isMe ? null : null,
-        cards: showCards ? p.cards.map(cardCode) : p.inHand ? ['??', '??'] : [],
+        cards: showCards ? p.cards.map(PokerLib.cardCode) : p.inHand ? ['??', '??'] : [],
         won: p.won,
       };
     });
@@ -716,7 +759,7 @@ class Table {
       status: this.status,
       street: this.street,
       handNo: this.handNo,
-      board: this.board.map(cardCode),
+      board: this.board.map(PokerLib.cardCode),
       pot: this.pot(),
       currentBet: this.currentBet,
       minRaise: this.minRaise,
@@ -733,7 +776,7 @@ class Table {
             stack: viewer.stack,
             isHost: viewer.token === this.hostToken,
             sittingOut: viewer.sittingOut,
-            cards: viewer.cards.map(cardCode),
+            cards: viewer.cards.map(PokerLib.cardCode),
           }
         : null,
       legal: viewer ? this.legalActionsFor(viewer) : null,
@@ -741,4 +784,5 @@ class Table {
   }
 }
 
-module.exports = { Table, MAX_SEATS };
+if (typeof module !== 'undefined' && module.exports) module.exports = { Table, MAX_SEATS };
+else Object.assign(globalThis, { Table, MAX_SEATS });

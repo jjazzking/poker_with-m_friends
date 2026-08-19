@@ -6,12 +6,20 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
+    "build": "node scripts/build-static.js",
+    "preview": "node scripts/build-static.js && node scripts/preview-static.js",
     "test": "node test/engine.test.js"
   },
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
     "express": "^4.19.2",
+    "peerjs": "^1.5.5",
     "ws": "^8.17.1"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "peer": "^1.0.2"
+  }
 }

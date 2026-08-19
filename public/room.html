@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>♠ 홀덤 테이블</title>
-<link rel="stylesheet" href="/style.css" />
+<link rel="stylesheet" href="style.css" />
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>♠️</text></svg>" />
 </head>
 <body class="room-body">
@@ -24,6 +24,7 @@
     <span class="room-title" id="room-name">테이블</span>
     <span class="badge" id="blind-badge">SB/BB</span>
     <span class="badge" id="hand-badge">#0</span>
+    <span class="badge host-badge" id="host-badge" hidden>방장 · 이 탭을 열어 두세요</span>
   </div>
   <div class="topbar-right">
     <button class="ghost sm" id="copy-link">🔗 초대 링크 복사</button>
@@ -32,6 +33,11 @@
     <button class="ghost sm danger" id="leave-btn">나가기</button>
   </div>
 </header>
+
+<div class="connecting" id="connecting" hidden>
+  <div class="spinner"></div>
+  <p>테이블에 연결하는 중…</p>
+</div>
 
 <main class="room">
   <section class="table-wrap">
@@ -104,6 +110,8 @@
 </footer>
 
 <div class="toast" id="toast" hidden></div>
-<script src="/room.js"></script>
+<script src="config.js"></script>
+<script src="net.js"></script>
+<script src="room.js"></script>
 </body>
 </html>
