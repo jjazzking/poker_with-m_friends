@@ -113,9 +113,16 @@ function fatal(title, detail) {
     `<a class="primary big" href="${new URL('index.html' + location.search, location.href).href}">새 방 만들기</a></div>`;
 }
 
+/** 연결이 될 때까지 스피너 아래 문구로 진행 상황을 알려 준다 */
+function connectingText(text) {
+  const el = $('#connecting-text');
+  if (el) el.textContent = text;
+}
+
 function connect(name) {
   $('#connecting').hidden = false;
-  Net.join({
+  connectingText('테이블에 연결하는 중…');
+  const joining = Net.join({
     roomId: ROOM_ID,
     name,
     token: getToken(),
@@ -128,19 +135,27 @@ function connect(name) {
         if (state.legal && prevActor !== state.actorSeat) notifyMyTurn();
       },
       onError(message) {
-        toast(message, true);
+        // 아직 한 번도 상태를 못 받았다면 사라지는 토스트 대신 스피너에 이유를 남긴다
+        if (!state) connectingText(message);
+        else toast(message, true);
       },
       onFatal(message) {
         toast(message, true);
         setTimeout(() => fatal('연결이 끊겼습니다', message), 1200);
       },
       onDisconnect() {
-        toast('연결이 끊겼습니다. 다시 연결 중…', true);
+        if (!state) connectingText('연결이 끊겼습니다. 다시 연결 중…');
+        else toast('연결이 끊겼습니다. 다시 연결 중…', true);
       },
       onHostReady() {
         toast('방이 열렸습니다. 초대 링크를 친구에게 보내세요!');
       },
     },
+  });
+
+  // 전송 계층 초기화 자체가 실패하면(스크립트 로드 실패 등) 조용히 멈추지 않게 한다
+  Promise.resolve(joining).catch((err) => {
+    fatal('연결에 실패했습니다', err && err.message ? err.message : '잠시 후 다시 시도해 주세요.');
   });
 }
 

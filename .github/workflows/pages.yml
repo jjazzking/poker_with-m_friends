@@ -5,8 +5,9 @@ on:
     branches:
       - main
       - master
-      # 지금 작업 중인 브랜치. main 으로 합친 뒤에는 이 줄을 지워도 됩니다.
+      # 작업 중인 브랜치들. main 으로 합친 뒤에는 지워도 됩니다.
       - claude/poker-multiplayer-site-eo2rds
+      - claude/screen-access-issue-4rjjck
   workflow_dispatch:
 
 # Pages 배포에 필요한 권한
@@ -37,7 +38,20 @@ jobs:
         run: npm test
 
       - name: 정적 사이트 빌드
+        # 저장소 Variables 에 POKER_SERVER_URL 을 넣어 두면 중앙 서버 모드로 빌드됩니다.
+        # (Settings > Secrets and variables > Actions > Variables)
+        # 비어 있으면 서버 없이 도는 P2P 폴백으로 빌드됩니다.
+        env:
+          POKER_SERVER_URL: ${{ vars.POKER_SERVER_URL }}
         run: npm run build
+
+      - name: 배포 모드 확인
+        run: |
+          if [ -n "${{ vars.POKER_SERVER_URL }}" ]; then
+            echo "::notice::중앙 서버 모드로 빌드됨 → ${{ vars.POKER_SERVER_URL }}"
+          else
+            echo "::warning::POKER_SERVER_URL 이 설정되지 않아 P2P 폴백으로 빌드됩니다. 저장소 Variables 에 서버 주소를 넣어 주세요."
+          fi
 
       - uses: actions/configure-pages@v5
 

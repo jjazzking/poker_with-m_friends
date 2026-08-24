@@ -13,7 +13,27 @@ if (!fs.existsSync(dist)) {
 const port = Number(process.env.PORT) || 4000;
 const app = express();
 app.use(express.static(dist));
+// 어떤 모드로 빌드됐는지는 생성된 config.js 가 알고 있다
+function builtMode() {
+  try {
+    const cfg = fs.readFileSync(path.join(dist, 'config.js'), 'utf8');
+    const url = /serverUrl:\s*"([^"]+)"/.exec(cfg);
+    if (/mode:\s*'server'/.test(cfg)) return { mode: 'server', serverUrl: url ? url[1] : null };
+    return { mode: 'p2p' };
+  } catch (_) {
+    return { mode: '?' };
+  }
+}
+
 app.listen(port, () => {
+  const built = builtMode();
   console.log(`♠ 정적 빌드 미리보기 → http://localhost:${port}`);
-  console.log('  (P2P 모드입니다. 방장 탭을 열어 둔 채로 링크를 다른 창에 붙여 넣어 보세요)');
+
+  if (built.mode === 'server') {
+    console.log(`  중앙 서버 모드 → ${built.serverUrl}`);
+  } else {
+    console.log('  P2P 모드입니다. 방장 탭을 열어 둔 채로 링크를 다른 창에 붙여 넣어 보세요.');
+    console.log('  중앙 서버로 시험하려면 다른 터미널에서 `npm start` 를 띄운 뒤');
+    console.log(`  http://localhost:${port}/index.html?mode=server&server=http://localhost:3000 로 접속하세요.`);
+  }
 });

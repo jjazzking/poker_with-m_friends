@@ -30,15 +30,30 @@ for (const file of ['peerjs.min.js', 'peerjs.min.js.map']) {
   if (fs.existsSync(from)) fs.copyFileSync(from, path.join(dist, 'vendor', file));
 }
 
-// 4) 실행 모드를 p2p 로 고정
+// 4) 실행 모드 결정 — 중앙 서버 주소가 주어지면 server 모드, 없으면 p2p 폴백
+const serverUrl = (process.env.POKER_SERVER_URL || '').trim().replace(/\/+$/, '');
+
+if (serverUrl && !/^https:\/\//.test(serverUrl)) {
+  console.error(`POKER_SERVER_URL 은 https:// 로 시작해야 합니다 (받은 값: ${serverUrl})`);
+  console.error('GitHub Pages 는 https 라서 http 서버를 부르면 브라우저가 차단합니다.');
+  process.exit(1);
+}
+
 fs.writeFileSync(
   path.join(dist, 'config.js'),
-  `/* 정적 배포용 설정 — npm run build 가 생성합니다. 수정하지 마세요. */
+  serverUrl
+    ? `/* 정적 배포용 설정 — npm run build 가 생성합니다. 수정하지 마세요. */
+window.POKER_CONFIG = {
+  mode: 'server',
+  serverUrl: ${JSON.stringify(serverUrl)},
+  peerServer: null,
+};
+`
+    : `/* 정적 배포용 설정 — npm run build 가 생성합니다. 수정하지 마세요. */
+/* POKER_SERVER_URL 이 없어 서버 없이 도는 P2P 폴백으로 빌드되었습니다.   */
 window.POKER_CONFIG = {
   mode: 'p2p',
-  // 방장 브라우저와 참가자를 서로 찾아 주는 시그널링 서버.
-  // null 이면 PeerJS 공개 서버(0.peerjs.com)를 사용합니다.
-  // 직접 운영한다면 'my-peer-server.example.com/myapp' 형태로 적어 주세요.
+  serverUrl: null,
   peerServer: null,
 };
 `
@@ -58,4 +73,9 @@ const files = [];
 })(dist, '');
 
 console.log(`dist/ 생성 완료 (${files.length}개 파일)`);
+console.log(
+  serverUrl
+    ? `  실행 모드: server → ${serverUrl}`
+    : '  실행 모드: p2p (POKER_SERVER_URL 이 없어 폴백으로 빌드했습니다)'
+);
 for (const f of files.sort()) console.log('  ' + f);

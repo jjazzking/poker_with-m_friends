@@ -8,7 +8,9 @@
     "dev": "node --watch src/server.js",
     "build": "node scripts/build-static.js",
     "preview": "node scripts/build-static.js && node scripts/preview-static.js",
-    "test": "node test/engine.test.js"
+    "test": "node test/engine.test.js && node test/server.test.js",
+    "test:engine": "node test/engine.test.js",
+    "test:server": "node test/server.test.js"
   },
   "engines": {
     "node": ">=18"

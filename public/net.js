@@ -8,6 +8,44 @@
   const cfg = window.POKER_CONFIG || {};
   const MODE = params.get('mode') || cfg.mode || 'server';
   const PEER_SERVER = params.get('peer') || cfg.peerServer || null;
+  // 중앙 서버 주소. 비어 있으면 이 페이지를 서빙한 서버와 같은 곳으로 본다.
+  // GitHub Pages 처럼 정적 호스팅에서 열었다면 반드시 채워져 있어야 한다.
+  const SERVER_URL = normalizeBase(params.get('server') || cfg.serverUrl || null);
+
+  function normalizeBase(url) {
+    if (!url) return null;
+    const trimmed = String(url).trim().replace(/\/+$/, '');
+    if (!trimmed) return null;
+    return (/^https?:\/\//.test(trimmed) ? trimmed : 'https://' + trimmed) + '/';
+  }
+
+  /** 서버의 HTTP 주소 (SERVER_URL 이 없으면 현재 경로 기준 상대 주소) */
+  function apiUrl(pathname) {
+    return SERVER_URL ? new URL(pathname, SERVER_URL).href : pathname;
+  }
+
+  /** 서버의 WebSocket 주소 */
+  function wsUrl() {
+    if (!SERVER_URL) {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      return `${proto}://${location.host}/ws`;
+    }
+    const u = new URL('ws', SERVER_URL);
+    u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
+    return u.href;
+  }
+
+  /**
+   * https 페이지에서 http 서버를 부르면 브라우저가 조용히 막아 버린다.
+   * 무한 스피너 대신 원인을 바로 알려 주기 위해 미리 확인한다.
+   */
+  function mixedContentError() {
+    if (!SERVER_URL) return null;
+    if (location.protocol === 'https:' && SERVER_URL.startsWith('http://')) {
+      return '서버 주소가 http 입니다. https 로 접속되는 서버 주소를 설정해 주세요.';
+    }
+    return null;
+  }
 
   const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 헷갈리는 I,O,0,1 제외
   const PEER_PREFIX = 'holdem-';
@@ -44,49 +82,117 @@
 
   const ServerNet = {
     async createRoom(config) {
-      const res = await fetch('api/rooms', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config),
-      });
-      if (!res.ok) throw new Error('방 생성에 실패했습니다');
+      const blocked = mixedContentError();
+      if (blocked) throw new Error(blocked);
+
+      let res;
+      try {
+        res = await fetch(apiUrl('api/rooms'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(config),
+        });
+      } catch (_) {
+        throw new Error('서버에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.');
+      }
+      if (!res.ok) {
+        const detail = await res.json().catch(() => null);
+        throw new Error((detail && detail.error) || '방 생성에 실패했습니다');
+      }
       const data = await res.json();
       return { roomId: data.roomId };
     },
 
     async roomInfo(roomId) {
-      const res = await fetch(`api/rooms/${encodeURIComponent(roomId)}`);
-      if (!res.ok) return null;
-      return res.json();
+      try {
+        const res = await fetch(apiUrl(`api/rooms/${encodeURIComponent(roomId)}`));
+        if (!res.ok) return null;
+        return await res.json();
+      } catch (_) {
+        return null; // 서버가 자는 중일 수 있다. 실제 판단은 WebSocket 이 한다.
+      }
     },
 
     join({ roomId, name, token, handlers }) {
+      const blocked = mixedContentError();
+      if (blocked) return handlers.onFatal(blocked);
+
       let ws = null;
       let delay = 500;
+      let attempts = 0;
+      let everConnected = false;
+      let closed = false; // leave 등으로 의도적으로 끊은 경우
 
       const open = () => {
-        const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-        ws = new WebSocket(`${proto}://${location.host}/ws`);
+        if (closed) return;
+        try {
+          ws = new WebSocket(wsUrl());
+        } catch (_) {
+          return scheduleRetry();
+        }
+
         ws.addEventListener('open', () => {
+          everConnected = true;
+          attempts = 0;
           delay = 500;
           ws.send(JSON.stringify({ type: 'join', roomId, token, name }));
         });
+
         ws.addEventListener('message', (ev) => {
-          const msg = JSON.parse(ev.data);
+          let msg;
+          try {
+            msg = JSON.parse(ev.data);
+          } catch (_) {
+            return;
+          }
           if (msg.type === 'state') handlers.onState(msg);
           else if (msg.type === 'error') handlers.onError(msg.message);
-          else if (msg.type === 'fatal') handlers.onFatal(msg.message);
+          else if (msg.type === 'fatal') {
+            closed = true; // 방이 없는 등 재시도가 무의미한 상황
+            handlers.onFatal(msg.message);
+          }
         });
+
         ws.addEventListener('close', () => {
-          handlers.onDisconnect();
-          setTimeout(open, delay);
-          delay = Math.min(delay * 2, 8000);
+          if (closed) return;
+          if (everConnected) handlers.onDisconnect();
+          scheduleRetry();
         });
+
+        // error 뒤에는 항상 close 가 이어지므로 재연결은 close 에서만 건다
+        ws.addEventListener('error', () => {});
       };
+
+      const scheduleRetry = () => {
+        attempts += 1;
+
+        // 한 번도 못 붙었다면 주소나 서버 자체가 문제일 가능성이 높다
+        if (!everConnected) {
+          if (attempts === 3) {
+            handlers.onError(
+              SERVER_URL
+                ? '서버를 깨우는 중입니다… (무료 호스팅은 첫 접속에 1분쯤 걸릴 수 있어요)'
+                : '서버에 연결할 수 없습니다. 다시 시도하는 중…'
+            );
+          }
+          if (attempts >= 12) {
+            closed = true;
+            return handlers.onFatal('서버에 연결할 수 없습니다. 서버가 켜져 있는지 확인해 주세요.');
+          }
+        }
+
+        setTimeout(open, delay);
+        delay = Math.min(delay * 2, 8000);
+      };
+
       open();
 
       Net.send = (msg) => {
         if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+        if (msg && msg.type === 'leave') {
+          closed = true;
+          if (ws) ws.close();
+        }
       };
     },
   };

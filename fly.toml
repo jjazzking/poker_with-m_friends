@@ -1,0 +1,33 @@
+# Fly.io 배포 설정 — 영구 볼륨을 붙일 수 있어 재배포에도 방 상태가 살아남는다.
+#
+#   fly launch --no-deploy --copy-config
+#   fly volumes create poker_data --size 1
+#   fly secrets set ALLOWED_ORIGINS=https://jjazzking.github.io
+#   fly deploy
+app = "poker-with-friends"
+primary_region = "nrt"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "3000"
+  DATA_DIR = "/data"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/healthz"
+
+[mounts]
+  source = "poker_data"
+  destination = "/data"
