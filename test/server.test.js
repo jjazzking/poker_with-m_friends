@@ -14,6 +14,7 @@ const path = require('path');
 const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'poker-test-'));
 process.env.DATA_DIR = DATA_DIR;
 process.env.ALLOWED_ORIGINS = 'https://allowed.example';
+process.env.DISCONNECT_GRACE_SEC = '1'; // 테스트가 오래 걸리지 않도록 짧게
 
 const WebSocket = require('ws');
 
@@ -183,38 +184,103 @@ function listen(server) {
     );
   });
 
-  await test('연결이 끊겨도 방과 스택은 남는다', async () => {
+  await test('연결이 끊기면 표시됐다가 유예 시간 뒤 자리에서 빠진다', async () => {
     const table = srv.rooms.get(roomId);
     assert.ok(table, '방이 살아 있어야 한다');
-    assert.strictEqual(table.players.size, 2, '끊긴 플레이어도 자리에 남는다');
+    assert.strictEqual(table.players.size, 2, '끊기자마자 사라지지는 않는다');
+
     // 서버가 close 를 처리할 때까지 잠깐 기다린다
     await waitFor(
       () => [...table.players.values()].every((p) => !p.connected),
       '끊긴 플레이어는 연결 해제로 표시된다'
     );
+    assert.ok(
+      [...table.players.values()].every((p) => p.dropAt > Date.now() - 1000),
+      '퇴장 예정 시각이 잡혀야 한다'
+    );
+
+    await waitFor(() => table.players.size === 0, '유예 시간이 지나면 자리에서 빠진다', 6000);
+  });
+
+  await test('돌아오면 자리를 지킨다', async () => {
+    const create = await fetch(`${base}/api/rooms`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: '복귀테스트' }),
+    });
+    const { roomId: rid } = await create.json();
+
+    const connect = () =>
+      new Promise((resolve, reject) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { origin: 'https://allowed.example' });
+        ws.on('error', reject);
+        ws.on('open', () => {
+          ws.send(JSON.stringify({ type: 'join', roomId: rid, token: 'back', name: '다시온사람' }));
+          resolve(ws);
+        });
+      });
+
+    const first = await connect();
+    const table = srv.rooms.get(rid);
+    await waitFor(() => table.players.size === 1, '입장해야 한다');
+
+    first.close(); // 새로고침을 흉내 낸다
+    await waitFor(() => !table.players.get('back').connected, '끊김으로 표시된다');
+
+    const second = await connect(); // 유예 시간 안에 복귀
+    await waitFor(() => table.players.get('back').connected, '다시 연결되어야 한다');
+    assert.strictEqual(table.players.get('back').dropAt, null, '퇴장 예약이 취소되어야 한다');
+
+    await new Promise((r) => setTimeout(r, 1500)); // 원래 유예 시간이 지나도
+    assert.ok(table.players.has('back'), '돌아온 사람을 쫓아내면 안 된다');
+
+    second.close();
+    table.dispose();
+    srv.rooms.delete(rid);
+    srv.sockets.delete(rid);
   });
 
   await test('저장한 방을 재시작 후 복원한다', async () => {
+    // 앞선 테스트에 기대지 않도록 이 테스트만의 방을 새로 만든다
+    const create = await fetch(`${base}/api/rooms`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: '복원테스트' }),
+    });
+    const { roomId: rid } = await create.json();
+
+    const table = srv.rooms.get(rid);
+    table.addPlayer('keep-a', '앨리스');
+    table.addPlayer('keep-b', '밥');
+    table.setConnected('keep-a', true);
+    table.setConnected('keep-b', true);
+
     srv.persist(true);
     const saved = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'rooms.json'), 'utf8'));
     assert.strictEqual(saved.version, 1);
-    const entry = saved.rooms.find((r) => r.id === roomId);
+    const entry = saved.rooms.find((r) => r.id === rid);
     assert.ok(entry, '만든 방이 저장본에 있어야 한다');
     assert.strictEqual(entry.snapshot.players.length, 2);
 
     // 프로세스가 죽었다 살아난 상황을 흉내 낸다
     const before = entry.snapshot.players.map((p) => `${p.name}:${p.stack}`).sort();
-    srv.rooms.get(roomId).clearTimers();
-    srv.rooms.delete(roomId);
-    srv.sockets.delete(roomId);
+    table.dispose();
+    srv.rooms.delete(rid);
+    srv.sockets.delete(rid);
 
     srv.restoreRooms();
 
-    const restored = srv.rooms.get(roomId);
+    const restored = srv.rooms.get(rid);
     assert.ok(restored, '방이 복원되어야 한다');
     const after = [...restored.players.values()].map((p) => `${p.name}:${p.stack}`).sort();
     assert.deepStrictEqual(after, before, '이름과 스택이 그대로여야 한다');
-    assert.strictEqual(restored.config.name, '테스트룸');
+    assert.strictEqual(restored.config.name, '복원테스트');
+
+    // 복원된 사람은 끊긴 상태지만, 돌아올 틈도 없이 쫓겨나면 안 된다
+    assert.ok(
+      [...restored.players.values()].every((p) => !p.connected && p.dropAt === null),
+      '복원 직후에는 퇴장 예약이 걸려 있지 않아야 한다'
+    );
   });
 
   for (const table of srv.rooms.values()) table.clearTimers();

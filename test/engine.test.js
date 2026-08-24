@@ -406,6 +406,96 @@ testAsync('랜덤 봇 300핸드: 칩 총량 보존 + 규칙 위반 없음', asyn
   t.clearTimers();
 });
 
+/* ------------------------------------------------- 연결 끊김 자동 퇴장 */
+
+testAsync('연결이 끊기면 유예 시간 뒤에 자리에서 나간다', async () => {
+  const t = makeTable({ disconnectGrace: 60 });
+  t.addPlayer('a', '앨리스');
+  t.addPlayer('b', '밥');
+
+  t.setConnected('b', false);
+  assert.ok(t.players.has('b'), '유예 시간 동안에는 자리에 남아 있어야 한다');
+  assert.ok(t.players.get('b').dropAt > Date.now(), '퇴장 예정 시각이 잡혀야 한다');
+
+  await new Promise((r) => setTimeout(r, 140));
+  assert.ok(!t.players.has('b'), '유예 시간이 지나면 자리에서 빠져야 한다');
+  assert.ok(
+    t.log.some((l) => l.text.includes('연결이 끊겨')),
+    '왜 나갔는지 기록이 남아야 한다'
+  );
+  t.dispose();
+});
+
+testAsync('유예 시간 안에 돌아오면 자리를 지킨다', async () => {
+  const t = makeTable({ disconnectGrace: 60 });
+  t.addPlayer('a', '앨리스');
+  t.addPlayer('b', '밥');
+
+  t.setConnected('b', false);
+  await new Promise((r) => setTimeout(r, 30));
+  t.setConnected('b', true); // 새로고침하고 돌아옴
+
+  await new Promise((r) => setTimeout(r, 120));
+  assert.ok(t.players.has('b'), '돌아왔으면 쫓아내면 안 된다');
+  assert.strictEqual(t.players.get('b').dropAt, null, '퇴장 예약이 취소되어야 한다');
+  t.dispose();
+});
+
+testAsync('핸드 중에 나가도 팟에 넣은 칩이 사라지지 않는다', async () => {
+  const t = makeTable({ disconnectGrace: 0 }); // 자동 퇴장은 끄고 수동으로 확인
+  t.addPlayer('a', '앨리스');
+  t.addPlayer('b', '밥');
+  t.addPlayer('c', '캐럴');
+  const total = [...t.players.values()].reduce((s, p) => s + p.stack, 0);
+
+  t.startHand();
+  // 누군가 칩을 넣은 상태에서 자리를 뜬다
+  const actor = t.seatedPlayers().find((p) => p.seat === t.actorSeat);
+  t.act(actor.token, 'call');
+  const potBefore = t.pot();
+  assert.ok(potBefore > 0, '팟에 칩이 들어가 있어야 한다');
+
+  const victim = t.seatedPlayers().find((p) => p.inHand && !p.folded && p.totalBet > 0);
+  t.removePlayer(victim.token);
+
+  assert.ok(t.players.has(victim.token), '핸드 중에는 자리를 바로 지우지 않는다');
+  assert.strictEqual(t.players.get(victim.token).leaving, true, '나가는 중으로 표시된다');
+  assert.ok(t.pot() >= potBefore, `팟이 줄어들면 안 된다 (${potBefore} → ${t.pot()})`);
+
+  // 핸드가 끝나면 실제로 자리에서 빠지고, 칩 총량은 그대로여야 한다
+  // (actionTime 이 0이라 자동 폴드가 없으므로 남은 사람들을 직접 진행시킨다)
+  t.autoNext = false;
+  let guard = 0;
+  while (t.status === 'playing' && t.actorSeat !== null) {
+    const cur = t.seatedPlayers().find((p) => p.seat === t.actorSeat);
+    t.act(cur.token, 'fold');
+    if (++guard > 20) throw new Error('핸드가 진행되지 않는다');
+  }
+  guard = 0;
+  while (t.status !== 'waiting') {
+    await tick();
+    if (++guard > 400) throw new Error('핸드가 끝나지 않는다');
+  }
+  assert.ok(!t.players.has(victim.token), '핸드가 끝나면 자리에서 빠져야 한다');
+
+  const after = [...t.players.values()].reduce((s, p) => s + p.stack, 0);
+  assert.strictEqual(after, total - victim.stack, `칩이 사라졌다 (${total} → ${after} + ${victim.stack})`);
+  t.dispose();
+});
+
+testAsync('방장이 끊겨서 나가면 방장이 넘어간다', async () => {
+  const t = makeTable({ disconnectGrace: 60 });
+  t.addPlayer('a', '앨리스');
+  t.addPlayer('b', '밥');
+  assert.strictEqual(t.hostToken, 'a', '먼저 들어온 사람이 방장이다');
+
+  t.setConnected('a', false);
+  await new Promise((r) => setTimeout(r, 140));
+  assert.ok(!t.players.has('a'), '방장도 예외 없이 나간다');
+  assert.strictEqual(t.hostToken, 'b', '남은 사람에게 방장이 넘어가야 한다');
+  t.dispose();
+});
+
 process.on('exit', () => {
   console.log(`\n${passed}개 테스트 통과${process.exitCode ? ' (실패 있음)' : ''}\n`);
 });

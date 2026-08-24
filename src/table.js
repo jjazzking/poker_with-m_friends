@@ -10,6 +10,9 @@ const MAX_SEATS = 9;
 const SHOWDOWN_DELAY = 6000;
 const FOLD_END_DELAY = 2500;
 const RUNOUT_DELAY = 1400;
+// 연결이 끊긴 사람을 자리에서 내보내기까지 기다리는 시간.
+// 새로고침이나 잠깐의 네트워크 끊김으로 쫓겨나지 않을 만큼은 줘야 한다.
+const DISCONNECT_GRACE_MS = 60000;
 
 let nextPlayerId = 1;
 
@@ -39,6 +42,8 @@ class Table {
     this.results = null;
     this.deadline = null;
     this.timers = [];
+    this.dropTimers = new Map(); // token -> 연결 끊김 퇴장 타이머
+    this.disconnectGrace = config.disconnectGrace ?? DISCONNECT_GRACE_MS;
     this.createdAt = Date.now();
     this.lastActivity = Date.now();
     this.autoNext = true;
@@ -71,6 +76,8 @@ class Table {
       stack,
       connected: true,
       sittingOut: false,
+      leaving: false, // 핸드가 끝나면 자리에서 빠진다
+      dropAt: null,   // 연결이 끊긴 사람이 자동 퇴장되는 시각
       // 핸드 단위 상태
       inHand: false,
       cards: [],
@@ -89,7 +96,9 @@ class Table {
     const existing = this.players.get(token);
     if (existing) {
       existing.connected = true;
+      existing.leaving = false; // 돌아왔으니 내보내지 않는다
       existing.name = name || existing.name;
+      this.cancelDrop(token);
       this.touch();
       return existing;
     }
@@ -141,34 +150,103 @@ class Table {
   removePlayer(token) {
     const p = this.players.get(token);
     if (!p) return;
+    this.cancelDrop(token);
+
     if (p.inHand && this.status === 'playing' && !p.folded) {
-      // 진행 중인 핸드에서는 폴드 처리 후 정리
+      // 진행 중인 핸드에서는 폴드만 시키고 자리는 남겨 둔다.
+      // 여기서 바로 지우면 이 사람이 팟에 넣은 칩이 pot() 계산에서 통째로
+      // 사라져 버린다. 실제 정리는 핸드가 끝난 뒤 purgeLeaving() 이 한다.
       p.folded = true;
       p.hasActed = true;
       p.lastAction = '폴드';
+      p.leaving = true;
       this.pushLog(`${p.name} 님이 나가서 폴드 처리되었습니다.`);
-      this.players.delete(token);
       if (this.hostToken === token) this.reassignHost();
       if (this.actorSeat === p.seat) this.advance();
       else this.checkAloneWinner();
       this.touch();
       return;
     }
+
     this.players.delete(token);
     this.pushLog(`${p.name} 님이 나갔습니다.`);
     if (this.hostToken === token) this.reassignHost();
     this.touch();
   }
 
+  /** 핸드가 끝난 뒤, 나가기로 표시된 사람들을 실제로 자리에서 뺀다 */
+  purgeLeaving() {
+    let removed = 0;
+    for (const [token, p] of [...this.players]) {
+      if (!p.leaving) continue;
+      this.players.delete(token);
+      this.cancelDrop(token);
+      if (this.hostToken === token) this.reassignHost();
+      removed++;
+    }
+    return removed;
+  }
+
   reassignHost() {
-    this.hostToken = this.players.size ? [...this.players.keys()][0] : null;
+    // 나가는 중인 사람에게 방장을 넘기면 곧바로 다시 넘겨야 한다
+    const next = [...this.players.values()].find((p) => !p.leaving);
+    this.hostToken = next ? next.token : null;
   }
 
   setConnected(token, connected) {
     const p = this.players.get(token);
     if (!p) return;
     p.connected = connected;
+    if (connected) {
+      p.leaving = false;
+      this.cancelDrop(token);
+    } else {
+      this.scheduleDrop(token);
+    }
     this.touch();
+  }
+
+  /**
+   * 연결이 끊긴 사람을 유예 시간 뒤에 자리에서 내보낸다.
+   * 그 사이에 돌아오면 cancelDrop() 으로 없던 일이 된다.
+   */
+  scheduleDrop(token) {
+    this.cancelDrop(token);
+    const p = this.players.get(token);
+    if (!p || !this.disconnectGrace) return;
+
+    p.dropAt = Date.now() + this.disconnectGrace;
+    const timer = setTimeout(() => {
+      this.dropTimers.delete(token);
+      const target = this.players.get(token);
+      if (!target || target.connected) return; // 그새 돌아왔다
+      this.pushLog(`${target.name} 님이 연결이 끊겨 자리에서 나갔습니다.`);
+      this.removePlayer(token);
+      // 남은 사람만으로 다음 핸드를 시작할 수 있으면 이어서 진행한다
+      if (this.status === 'waiting') this.maybeAutoStart();
+    }, this.disconnectGrace);
+
+    if (typeof timer.unref === 'function') timer.unref();
+    this.dropTimers.set(token, timer);
+  }
+
+  cancelDrop(token) {
+    const timer = this.dropTimers.get(token);
+    if (timer) clearTimeout(timer);
+    this.dropTimers.delete(token);
+    const p = this.players.get(token);
+    if (p) p.dropAt = null;
+  }
+
+  clearDropTimers() {
+    for (const timer of this.dropTimers.values()) clearTimeout(timer);
+    this.dropTimers.clear();
+  }
+
+  /** 방을 버릴 때 이 테이블이 잡고 있는 타이머를 전부 정리한다 */
+  dispose() {
+    this.clearTimers();
+    this.clearDropTimers();
   }
 
   setSitOut(token, value) {
@@ -205,7 +283,7 @@ class Table {
   }
 
   eligiblePlayers() {
-    return this.seatedPlayers().filter((p) => !p.sittingOut && p.stack > 0);
+    return this.seatedPlayers().filter((p) => !p.sittingOut && p.stack > 0 && !p.leaving);
   }
 
   playersInHand() {
@@ -687,6 +765,7 @@ class Table {
       }
       this.board = [];
       this.results = null;
+      this.purgeLeaving(); // 팟 정산이 끝난 지금이 자리를 빼기에 안전한 시점이다
       this.touch();
       if (this.autoNext && this.eligiblePlayers().length >= 2) {
         try {
@@ -763,6 +842,8 @@ class Table {
         inHand: p.inHand,
         connected: p.connected,
         sittingOut: p.sittingOut,
+        leaving: p.leaving,
+        dropAt: p.dropAt,
         isHost: p.token === this.hostToken,
         isMe: !!isMe,
         lastAction: p.lastAction,

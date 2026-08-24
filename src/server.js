@@ -18,6 +18,8 @@ const PORT = process.env.PORT || 3000;
 const ROOM_TTL_MS = Number(process.env.ROOM_TTL_HOURS || 24) * 60 * 60 * 1000;
 const MAX_ROOMS = Number(process.env.MAX_ROOMS || 500);
 const ROOMS_PER_IP = Number(process.env.ROOMS_PER_IP || 20); // 10분 창 기준
+// 연결이 끊긴 사람을 자리에서 내보내기까지의 유예 시간. 0 이면 내보내지 않는다.
+const DISCONNECT_GRACE_SEC = process.env.DISCONNECT_GRACE_SEC;
 const SAVE_INTERVAL_MS = 15000;
 
 // 비워 두면 모든 출처를 허용한다. 배포 후에는 Pages 주소만 남기는 편이 안전하다.
@@ -90,6 +92,10 @@ function normalizeConfig(body = {}) {
     startingStack: clampInt(body.startingStack, bigBlind, 100000000, bigBlind * 100),
     maxPlayers: clampInt(body.maxPlayers, 2, 9, 9),
     actionTime: clampInt(body.actionTime, 0, 600, 60),
+    // 운영자가 정한다. 지정하지 않으면 Table 의 기본값(60초)을 쓴다.
+    ...(DISCONNECT_GRACE_SEC === undefined
+      ? {}
+      : { disconnectGrace: clampInt(DISCONNECT_GRACE_SEC, 0, 3600, 60) * 1000 }),
   };
 }
 
@@ -105,7 +111,7 @@ function createTable(id, config) {
 
 function dropRoom(id, reason) {
   const table = rooms.get(id);
-  if (table) table.clearTimers();
+  if (table) table.dispose();
   rooms.delete(id);
   sockets.delete(id);
   markDirty();
@@ -370,7 +376,7 @@ function shutdown(signal) {
   clearInterval(saver);
   persist(true);
 
-  for (const table of rooms.values()) table.clearTimers();
+  for (const table of rooms.values()) table.dispose();
   for (const ws of wss.clients) {
     try {
       send(ws, { type: 'error', message: '서버가 재시작 중입니다. 곧 다시 연결됩니다…' });

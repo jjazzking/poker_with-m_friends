@@ -192,6 +192,14 @@ function notifyMyTurn() {
 
 /* ------------------------------------------------------------- 렌더 */
 
+/** 연결이 끊긴 자리에 남은 시간을 함께 보여 준다 */
+function offlineLabel(p) {
+  if (p.leaving) return '나가는 중';
+  if (!p.dropAt) return '연결끊김';
+  const left = Math.ceil((p.dropAt - Date.now()) / 1000);
+  return left > 0 ? `연결끊김 ${left}초` : '연결끊김';
+}
+
 function cardEl(code) {
   const el = document.createElement('div');
   if (!code || code === '??') {
@@ -348,7 +356,7 @@ function renderSeats() {
       <div class="seat-stack">${fmt(p.stack)} <span class="sbb">(${toBB(p.stack)}BB)</span></div>
       ${p.handLabel ? `<div class="seat-hand">${p.handLabel}</div>` : ''}
       ${p.sittingOut ? '<div class="seat-tag">자리비움</div>' : ''}
-      ${!p.connected ? '<div class="seat-tag off">연결끊김</div>' : ''}
+      ${!p.connected ? `<div class="seat-tag off">${escapeHtml(offlineLabel(p))}</div>` : ''}
     `;
 
     seat.appendChild(cards);
