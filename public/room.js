@@ -77,11 +77,26 @@ function sendMsg(obj) {
 async function boot() {
   if (!ROOM_ID) return fatal('방 코드가 없습니다', '초대 링크를 다시 확인해 주세요.');
 
-  const info = await Net.roomInfo(ROOM_ID).catch(() => null);
-  // 서버 모드에서는 방 정보를 미리 알 수 있고, P2P 참가자는 방장에게 붙어야 알 수 있다
-  if (!info && Net.mode === 'server') {
-    return fatal('방을 찾을 수 없습니다', '링크가 만료되었거나 잘못된 코드입니다.');
+  // 방을 묻기 전에 서버를 먼저 깨운다.
+  // 이 순서를 지키지 않으면 잠들어 있는 서버를 "방이 없다"고 오진한다.
+  $('#connecting').hidden = false;
+  connectingText('테이블에 연결하는 중…');
+  await Net.warmUp({
+    onStatus: (state, message) => message && connectingText(message),
+  });
+
+  const result = await Net.roomInfo(ROOM_ID);
+
+  // 서버가 명확히 "그런 방 없다"고 답했을 때만 포기한다.
+  // 닿지 못한 경우(unknown)는 그대로 접속을 시도하고, 판단은 WebSocket 에 맡긴다.
+  if (result.status === 'missing') {
+    return fatal(
+      '방을 찾을 수 없습니다',
+      '링크가 만료되었거나 잘못된 코드입니다. 서버가 재시작되면 방이 사라질 수 있으니, 새로 만들어 주세요.'
+    );
   }
+
+  const info = result.info || null;
 
   if (info) {
     $('#room-name').textContent = info.config.name;
@@ -92,6 +107,7 @@ async function boot() {
   if (name) return connect(name);
 
   const modal = $('#name-modal');
+  $('#connecting').hidden = true; // 모달 뒤에서 스피너가 돌 필요는 없다
   modal.hidden = false;
   $('#modal-info').textContent = info
     ? `${info.config.name} · SB ${fmt(info.config.smallBlind)} / BB ${fmt(info.config.bigBlind)} · 시작 스택 ${fmt(info.config.startingStack)}`

@@ -103,13 +103,21 @@
       return { roomId: data.roomId };
     },
 
+    /**
+     * 방 조회 결과는 세 가지다. 이걸 뭉뚱그리면 자고 있는 서버를
+     * "방이 없다"고 오진하게 된다.
+     *   found   — 서버가 방 정보를 줬다
+     *   missing — 서버가 그런 방은 없다고 답했다 (404)
+     *   unknown — 서버에 닿지 못했다. 방이 있는지 없는지 알 수 없다.
+     */
     async roomInfo(roomId) {
       try {
         const res = await fetch(apiUrl(`api/rooms/${encodeURIComponent(roomId)}`));
-        if (!res.ok) return null;
-        return await res.json();
+        if (res.status === 404) return { status: 'missing' };
+        if (!res.ok) return { status: 'unknown' }; // 서버가 아파도 방 탓은 아니다
+        return { status: 'found', info: await res.json() };
       } catch (_) {
-        return null; // 서버가 자는 중일 수 있다. 실제 판단은 WebSocket 이 한다.
+        return { status: 'unknown' }; // 자는 중이거나 네트워크가 끊겼다
       }
     },
 
@@ -232,8 +240,9 @@
 
     async roomInfo(roomId) {
       const raw = sessionStorage.getItem(HOST_CFG_KEY(roomId));
-      if (!raw) return null; // 참가자는 방장에게 붙기 전에는 설정을 알 수 없다
-      return { roomId, config: JSON.parse(raw), host: true };
+      // 참가자는 방장에게 붙기 전에는 방 설정도, 방의 존재 여부도 알 수 없다
+      if (!raw) return { status: 'unknown' };
+      return { status: 'found', info: { roomId, config: JSON.parse(raw), host: true } };
     },
 
     async join({ roomId, name, token, handlers }) {
@@ -450,7 +459,7 @@
   const impl = MODE === 'p2p' ? P2PNet : ServerNet;
 
   Net.createRoom = (config) => impl.createRoom(config);
-  Net.roomInfo = (roomId) => impl.roomInfo(roomId);
+  Net.roomInfo = (roomId) => impl.roomInfo(roomId).catch(() => ({ status: 'unknown' }));
   Net.join = (opts) => {
     Net.roomId = opts.roomId;
     return impl.join(opts);
