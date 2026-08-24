@@ -1,0 +1,57 @@
+# 무료 호스팅이 잠들지 않도록 /healthz 를 주기적으로 찌른다.
+#
+# 외부 모니터링 서비스(UptimeRobot 등) 없이 GitHub Actions 만으로 해결한다.
+# 공개 저장소에서는 Actions 사용량이 무료다.
+#
+# ── 왜 24시간이 아니라 특정 시간대만 찌르나 ────────────────────────────
+# Render 무료 플랜은 한 달에 750 인스턴스-시간을 준다. 24시간 내내 깨워 두면
+# 730시간이라 이것만으로 한도를 거의 다 쓴다. 실제로 노는 시간대만 깨워 두면
+# 월 200시간 남짓이라 여유가 넉넉하다.
+#
+# 아래 cron 은 한국시간 18:00~01:00 (UTC 09:00~16:00) 에 10분마다 돈다.
+# 노는 시간대가 다르면 hours 부분만 고치면 된다. cron 은 항상 UTC 기준이다.
+#   예) 한국시간 20:00~24:00 → '*/10 11-14 * * *'
+#   예) 주말만               → '*/10 9-15 * * 6,0'
+name: Keep server warm
+
+on:
+  schedule:
+    - cron: '*/10 9-15 * * *'
+  workflow_dispatch: # 지금 당장 깨우고 싶을 때 수동 실행
+
+# 여러 번 겹쳐 돌 필요가 없다
+concurrency:
+  group: keep-warm
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 서버 깨우기
+        env:
+          SERVER_URL: ${{ vars.POKER_SERVER_URL }}
+        run: |
+          if [ -z "$SERVER_URL" ]; then
+            echo "::notice::POKER_SERVER_URL 이 없어 건너뜁니다. (아직 중앙 서버를 배포하지 않았다면 정상입니다)"
+            exit 0
+          fi
+
+          url="${SERVER_URL%/}/healthz"
+          echo "→ $url"
+
+          # 자고 있던 서버는 첫 응답까지 1분 가까이 걸린다. 넉넉히 기다리고 몇 번 재시도한다.
+          for attempt in 1 2 3; do
+            if body=$(curl -fsS --max-time 90 "$url"); then
+              echo "깨어 있음: $body"
+              exit 0
+            fi
+            echo "시도 $attempt 실패, 15초 후 재시도"
+            sleep 15
+          done
+
+          # 서버가 죽어 있어도 워크플로를 실패로 남겨 두면 알림이 쌓이기만 하므로 경고로 끝낸다
+          echo "::warning::서버가 응답하지 않습니다: $url"

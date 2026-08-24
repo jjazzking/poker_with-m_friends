@@ -52,6 +52,40 @@ a { color: var(--accent); }
 .lobby-head h1 { font-size: 30px; margin: 0 0 8px; letter-spacing: -0.5px; }
 .lobby-head p { color: var(--muted); margin: 0 0 24px; line-height: 1.6; }
 
+/* 잠들어 있던 서버를 깨우는 동안의 안내 (무료 호스팅 대응) */
+.server-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: -14px 0 24px !important;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  font-size: 13px;
+  color: var(--muted) !important;
+}
+.server-status::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+.server-status.waking { color: var(--gold) !important; }
+.server-status.waking::before { animation: pulse-dot 1.2s ease-in-out infinite; }
+.server-status.ready { color: var(--accent) !important; }
+.server-status.down { color: var(--red) !important; }
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .server-status.waking::before { animation: none; }
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);

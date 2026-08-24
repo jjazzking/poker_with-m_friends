@@ -458,5 +458,50 @@
   Net.send = () => {}; // join 이후 실제 구현으로 교체된다
   Net.makeRoomCode = randomCode;
 
+  /**
+   * 서버 예열.
+   *
+   * 무료 호스팅은 한동안 요청이 없으면 잠들고, 다시 깨어나는 데 1분 가까이 걸린다.
+   * 로비를 여는 순간 미리 깨워 두면 사용자가 닉네임과 블라인드를 채워 넣는 동안
+   * 서버가 일어나므로, 정작 "방 만들기"를 누를 때는 기다릴 일이 거의 없다.
+   *
+   * 실패해도 조용히 넘어간다 — 실제 판단은 방 생성/접속이 한다.
+   */
+  Net.warmUp = ({ onStatus } = {}) => {
+    if (MODE !== 'server') return Promise.resolve(false);
+
+    const say = (state, message) => onStatus && onStatus(state, message);
+    const started = Date.now();
+    const LIMIT_MS = 90000;
+    let announced = false;
+
+    const attempt = async () => {
+      try {
+        const res = await fetch(apiUrl('api/health'), { cache: 'no-store' });
+        if (res.ok) {
+          say('ready', announced ? '서버 준비 완료' : '');
+          return true;
+        }
+      } catch (_) {
+        /* 아직 자는 중이거나 네트워크가 불안정하다 */
+      }
+
+      if (Date.now() - started > LIMIT_MS) {
+        say('down', '서버에 연결되지 않습니다. 잠시 후 다시 시도해 주세요.');
+        return false;
+      }
+
+      // 첫 시도가 실패했을 때만 안내한다. 깨어 있으면 아무 표시도 하지 않는다.
+      if (!announced) {
+        announced = true;
+        say('waking', '서버를 깨우는 중입니다… (최대 1분)');
+      }
+      await new Promise((r) => setTimeout(r, 3000));
+      return attempt();
+    };
+
+    return attempt();
+  };
+
   window.Net = Net;
 })();

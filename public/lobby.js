@@ -7,6 +7,24 @@ const savedName = localStorage.getItem(NAME_KEY) || '';
 $('#nickname').value = savedName;
 $('#join-name').value = savedName;
 
+/**
+ * 페이지를 여는 즉시 서버를 깨워 둔다.
+ * 사용자가 방 설정을 채우는 동안 서버가 일어나므로 체감 대기가 거의 사라진다.
+ */
+const statusEl = $('#server-status');
+Net.warmUp({
+  onStatus(state, message) {
+    if (!message) {
+      statusEl.hidden = true;
+      return;
+    }
+    statusEl.hidden = false;
+    statusEl.textContent = message;
+    statusEl.className = 'server-status ' + state;
+    if (state === 'ready') setTimeout(() => (statusEl.hidden = true), 2000);
+  },
+});
+
 const bbInput = $('#bb');
 const sbInput = $('#sb');
 const stackInput = $('#stack');
