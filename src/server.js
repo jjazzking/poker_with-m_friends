@@ -206,7 +206,7 @@ setInterval(() => {
     const set = sockets.get(id);
     const empty = !set || set.size === 0;
     if (empty && now - table.lastActivity > ROOM_TTL_MS) {
-      table.clearTimers();
+      table.dispose();
       rooms.delete(id);
       sockets.delete(id);
       console.log(`[room] ${id} 정리됨`);

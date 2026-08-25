@@ -13,6 +13,7 @@ let state = null;
 let unit = localStorage.getItem('poker:unit') || 'bb';
 let betChips = 0; // 항상 "칩 기준 레이즈 목표 금액"으로 보관
 let reconnectDelay = 500;
+let offlineTimer = null;
 let timerRAF = null;
 
 /** 내 패를 이루는 카드(하이라이트용) */
@@ -317,7 +318,7 @@ function renderSeats() {
       <div class="seat-stack">${fmt(p.stack)} <span class="sbb">(${toBB(p.stack)}BB)</span></div>
       ${p.handLabel ? `<div class="seat-hand">${p.handLabel}</div>` : ''}
       ${p.sittingOut ? '<div class="seat-tag">자리비움</div>' : ''}
-      ${!p.connected ? '<div class="seat-tag off">연결끊김</div>' : ''}
+      ${!p.connected ? `<div class="seat-tag off"${offlineUntil(p) ? ` data-until="${offlineUntil(p)}"` : ''}>연결끊김</div>` : ''}
     `;
 
     seat.appendChild(cards);
@@ -340,6 +341,29 @@ function renderSeats() {
     }
     wrap.appendChild(seat);
   });
+
+  syncOfflineTags();
+}
+
+/** 연결이 끊긴 좌석이 자동 폴드되기까지 남은 시각(ms) */
+function offlineUntil(p) {
+  const grace = state && state.room ? state.room.disconnectGrace : 0;
+  return p.disconnectedAt && grace ? p.disconnectedAt + grace : 0;
+}
+
+/** 좌석 태그의 남은 초를 1초마다 갱신한다 (끊긴 사람이 있을 때만 돈다) */
+function syncOfflineTags() {
+  const tags = document.querySelectorAll('.seat-tag.off[data-until]');
+  if (!tags.length) {
+    clearInterval(offlineTimer);
+    offlineTimer = null;
+    return;
+  }
+  for (const el of tags) {
+    const left = Math.ceil((Number(el.dataset.until) - Date.now()) / 1000);
+    el.textContent = left > 0 ? `연결끊김 ${left}초` : '연결끊김';
+  }
+  if (!offlineTimer) offlineTimer = setInterval(syncOfflineTags, 1000);
 }
 
 function relSeat(seat, mySeat) {
