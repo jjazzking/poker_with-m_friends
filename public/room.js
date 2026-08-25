@@ -15,6 +15,10 @@ let betChips = 0; // 항상 "칩 기준 레이즈 목표 금액"으로 보관
 let reconnectDelay = 500;
 let offlineTimer = null;
 let timerRAF = null;
+const BASE_TITLE = document.title;
+let titleTimer = null;
+let titleFlipped = false;
+let turnNotification = null;
 
 /** 내 패를 이루는 카드(하이라이트용) */
 let usedCards = new Set();
@@ -104,6 +108,7 @@ async function boot() {
     if (!v) return;
     localStorage.setItem(NAME_KEY, v);
     modal.hidden = true;
+    askNotifyPermission();
     connect(v);
   });
 }
@@ -146,6 +151,10 @@ function connect(name) {
 }
 
 function notifyMyTurn() {
+  if (document.hidden) {
+    startTitleFlash();
+    showTurnNotification();
+  }
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const osc = ctx.createOscillator();
@@ -237,6 +246,7 @@ function render() {
   renderMadeHand();
   renderLog();
   renderActions();
+  syncTurnSignals();
 }
 
 function renderMadeHand() {
@@ -317,6 +327,7 @@ function renderSeats() {
       <div class="seat-name">${p.seat === state.buttonSeat ? '<span class="dealer">D</span>' : ''}${escapeHtml(p.name)}${p.isHost ? ' 👑' : ''}</div>
       <div class="seat-stack">${fmt(p.stack)} <span class="sbb">(${toBB(p.stack)}BB)</span></div>
       ${p.handLabel ? `<div class="seat-hand">${p.handLabel}</div>` : ''}
+      ${seatTimerBar(p)}
       ${p.sittingOut ? '<div class="seat-tag">자리비움</div>' : ''}
       ${!p.connected ? `<div class="seat-tag off"${offlineUntil(p) ? ` data-until="${offlineUntil(p)}"` : ''}>연결끊김</div>` : ''}
     `;
@@ -343,6 +354,12 @@ function renderSeats() {
   });
 
   syncOfflineTags();
+}
+
+/** 액션 중인 좌석 아래에 남은 시간 게이지를 깐다 (남의 차례에도 보인다) */
+function seatTimerBar(p) {
+  const live = state.status === 'playing' && state.deadline && state.room.actionTime;
+  return live && p.seat === state.actorSeat ? '<div class="seat-timer"></div>' : '';
 }
 
 /** 연결이 끊긴 좌석이 자동 폴드되기까지 남은 시각(ms) */
@@ -425,7 +442,6 @@ function renderActions() {
           ? '준비 완료! 게임을 시작하세요.'
           : '방장이 게임을 시작하기를 기다리는 중…'
         : '친구를 초대해 주세요. 2명 이상이면 시작할 수 있습니다.';
-    stopTimer();
     return;
   }
 
@@ -457,7 +473,6 @@ function renderActions() {
     betChips = legal.minRaiseTo;
   }
   syncBetUI();
-  startTimer();
 }
 
 function clampBet(v) {
@@ -513,25 +528,68 @@ function quickAmount(kind) {
   }
 }
 
-/* 타이머 */
+/* -------------------------------------------------- 내 차례 신호 + 타이머 */
+
+const HURRY_MS = 10000; // 이 아래로 남으면 붉게 재촉한다
+
+/** 내 차례 여부에 따라 화면 가장자리 글로우 · 카운트다운 · 탭 제목을 맞춘다 */
+function syncTurnSignals() {
+  const myTurn = !!(state && state.legal);
+  document.body.classList.toggle('my-turn', myTurn);
+  $('#turn-head').hidden = !myTurn;
+  if (!myTurn) {
+    document.body.classList.remove('turn-hurry');
+    stopTitleFlash();
+    closeTurnNotification();
+  } else if (document.hidden) {
+    startTitleFlash();
+  }
+  startTimer();
+}
+
+function timeLeft() {
+  return state && state.deadline ? Math.max(0, state.deadline - Date.now()) : 0;
+}
+
 function startTimer() {
   stopTimer();
   const bar = $('#timer');
-  if (!state.deadline || !state.room.actionTime) {
+  if (!state || state.status !== 'playing' || !state.deadline || !state.room.actionTime) {
     bar.style.width = '0%';
+    $('#turn-count').textContent = '';
+    document.body.classList.remove('turn-hurry');
     return;
   }
   const total = state.room.actionTime * 1000;
-  const end = state.deadline;
+  const myTurn = !!state.legal;
+  const count = $('#turn-count');
+
   const tick = () => {
-    const left = Math.max(0, end - Date.now());
+    const left = timeLeft();
     const pct = (left / total) * 100;
+    const hurry = left <= HURRY_MS;
+
     bar.style.width = pct + '%';
-    bar.classList.toggle('danger', pct < 25);
+    bar.classList.toggle('danger', hurry);
+
+    // 액션 중인 좌석은 매 렌더마다 새로 그려지므로 그때그때 찾는다
+    const seatBar = document.querySelector('.seat.acting .seat-timer');
+    if (seatBar) {
+      seatBar.style.width = pct + '%';
+      seatBar.classList.toggle('hurry', hurry);
+    }
+
+    if (myTurn) {
+      const label = Math.ceil(left / 1000) + '초';
+      if (count.textContent !== label) count.textContent = label;
+      count.classList.toggle('hurry', hurry);
+      document.body.classList.toggle('turn-hurry', hurry);
+    }
     if (left > 0) timerRAF = requestAnimationFrame(tick);
   };
   tick();
 }
+
 function stopTimer() {
   if (timerRAF) cancelAnimationFrame(timerRAF);
   timerRAF = null;
@@ -539,18 +597,89 @@ function stopTimer() {
   if (bar) bar.style.width = '0%';
 }
 
+/* ---------------------------------------------- 탭이 백그라운드일 때 (E) */
+
+/** 다른 탭을 보고 있어도 알아챌 수 있도록 제목을 깜빡인다 */
+function startTitleFlash() {
+  if (titleTimer) return;
+  const swap = () => {
+    titleFlipped = !titleFlipped;
+    const secs = Math.ceil(timeLeft() / 1000);
+    document.title = titleFlipped ? `⏰ 내 차례!${secs > 0 ? ` (${secs}초)` : ''}` : BASE_TITLE;
+  };
+  swap();
+  titleTimer = setInterval(swap, 900);
+}
+
+function stopTitleFlash() {
+  if (titleTimer) clearInterval(titleTimer);
+  titleTimer = null;
+  titleFlipped = false;
+  document.title = BASE_TITLE;
+}
+
+/** 액션 버튼을 처음 누를 때(= 확실한 사용자 조작) 알림 권한을 물어본다 */
+function askNotifyPermission() {
+  if (!('Notification' in window) || Notification.permission !== 'default') return;
+  try {
+    const r = Notification.requestPermission();
+    if (r && typeof r.catch === 'function') r.catch(() => {});
+  } catch (_) {
+    /* 권한 요청을 막는 브라우저 */
+  }
+}
+
+function showTurnNotification() {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  closeTurnNotification();
+  try {
+    turnNotification = new Notification('♠ 내 차례입니다', {
+      body: `${state.room.name} — 지금 액션할 차례예요.`,
+      tag: 'poker-my-turn',
+    });
+    turnNotification.onclick = () => {
+      window.focus();
+      closeTurnNotification();
+    };
+  } catch (_) {
+    /* 알림을 지원하지 않는 환경 */
+  }
+}
+
+function closeTurnNotification() {
+  if (!turnNotification) return;
+  try {
+    turnNotification.close();
+  } catch (_) {
+    /* 이미 닫힘 */
+  }
+  turnNotification = null;
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    if (state && state.legal) startTitleFlash();
+    return;
+  }
+  stopTitleFlash();
+  closeTurnNotification();
+});
+
 /* ------------------------------------------------------------- 이벤트 */
 
 $('#btn-fold').addEventListener('click', () => {
   if (!state || !state.legal || state.legal.canCheck) return;
+  askNotifyPermission();
   sendMsg({ type: 'action', action: 'fold' });
 });
 $('#btn-call').addEventListener('click', () => {
   if (!state || !state.legal) return;
+  askNotifyPermission();
   sendMsg({ type: 'action', action: state.legal.canCheck ? 'check' : 'call' });
 });
 $('#btn-raise').addEventListener('click', () => {
   if (!state || !state.legal) return;
+  askNotifyPermission();
   const amount = clampBet(betChips);
   sendMsg({ type: 'action', action: amount >= state.legal.maxRaiseTo ? 'allin' : 'raise', amount });
 });

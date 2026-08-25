@@ -390,6 +390,71 @@ a { color: var(--accent); }
   min-width: 0;
 }
 
+/* ------------------------------------------------- 내 차례 신호 (A/B) */
+
+/* A. 화면 가장자리 글로우 — 시선이 어디에 있든 주변시에 걸리도록 */
+.turn-glow {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 60;
+  opacity: 0;
+  transition: opacity .25s ease;
+  box-shadow: inset 0 0 0 3px rgba(240, 194, 75, .55), inset 0 0 70px rgba(240, 194, 75, .28);
+}
+body.my-turn .turn-glow { opacity: 1; animation: turnBreathe 2s ease-in-out infinite; }
+body.my-turn.turn-hurry .turn-glow {
+  box-shadow: inset 0 0 0 3px rgba(224, 85, 99, .65), inset 0 0 70px rgba(224, 85, 99, .3);
+  animation-duration: .9s;
+}
+@keyframes turnBreathe {
+  0%, 100% { opacity: .35; }
+  50% { opacity: 1; }
+}
+
+/* B. 남은 시간을 숫자로 */
+.turn-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  margin-bottom: 6px;
+}
+.turn-label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  color: var(--gold);
+}
+.turn-count {
+  font-size: 20px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  line-height: 1;
+}
+.turn-count.hurry { color: var(--red); animation: countPop 1s steps(1, end) infinite; }
+@keyframes countPop {
+  0% { transform: scale(1.18); }
+  40%, 100% { transform: scale(1); }
+}
+
+/* 액션 중인 좌석 아래로 도는 게이지 — 남의 차례에도 보인다 */
+.seat-timer {
+  height: 3px;
+  margin: 4px -5px -3px;
+  border-radius: 2px;
+  background: var(--gold);
+  width: 100%;
+  transition: width .1s linear;
+}
+.seat-timer.hurry { background: var(--red); }
+
+@media (prefers-reduced-motion: reduce) {
+  body.my-turn .turn-glow { animation: none; opacity: 1; }
+  .turn-count.hurry { animation: none; }
+}
+
 /* ------------------------------------------------------------- 액션 바 */
 
 .actionbar {

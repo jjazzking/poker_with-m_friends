@@ -9,6 +9,9 @@
 </head>
 <body class="room-body">
 
+<!-- 내 차례일 때 화면 가장자리에서 은은하게 호흡하는 신호 -->
+<div class="turn-glow" id="turn-glow" aria-hidden="true"></div>
+
 <!-- 닉네임 입력 모달 -->
 <div class="modal" id="name-modal" hidden>
   <form class="modal-card" id="name-form">
@@ -80,6 +83,11 @@
 
   <div class="action-panel" id="action-panel" hidden>
     <div class="timer-wrap"><div class="timer" id="timer"></div></div>
+
+    <div class="turn-head" id="turn-head">
+      <span class="turn-label">내 차례</span>
+      <span class="turn-count" id="turn-count" role="timer" aria-live="off"></span>
+    </div>
 
     <div class="bet-controls">
       <div class="unit-toggle" role="group" aria-label="베팅 단위">
