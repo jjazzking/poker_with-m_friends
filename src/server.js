@@ -9,6 +9,9 @@ const { handleClientMessage } = require('./protocol');
 
 const PORT = process.env.PORT || 3000;
 const ROOM_TTL_MS = 1000 * 60 * 60 * 6; // 6시간 동안 활동이 없으면 방 정리
+const DISCONNECT_TIMEOUT_MS = 30000; // 응답 없는 소켓을 끊긴 것으로 판단하기까지의 시간
+const HEARTBEAT_MS = DISCONNECT_TIMEOUT_MS / 2; // 핑 → 폰 대기 → 다음 핑에서 정리
+const ROOM_SWEEP_MS = 30000; // 빈 방 청소 주기
 
 const app = express();
 app.use(express.json());
@@ -184,7 +187,7 @@ function handleMessage(ws, msg) {
   }
 }
 
-/* 죽은 소켓 정리 + 빈 방 청소 */
+/* 죽은 소켓 정리 — 폰이 한 번 빠지면 정리하므로 최대 DISCONNECT_TIMEOUT_MS 안에 감지된다 */
 setInterval(() => {
   for (const ws of wss.clients) {
     if (ws.isAlive === false) {
@@ -194,7 +197,10 @@ setInterval(() => {
     ws.isAlive = false;
     ws.ping();
   }
+}, HEARTBEAT_MS).unref();
 
+/* 빈 방 청소 */
+setInterval(() => {
   const now = Date.now();
   for (const [id, table] of rooms) {
     const set = sockets.get(id);
@@ -206,7 +212,7 @@ setInterval(() => {
       console.log(`[room] ${id} 정리됨`);
     }
   }
-}, 30000).unref();
+}, ROOM_SWEEP_MS).unref();
 
 server.listen(PORT, () => {
   console.log(`♠ 포커 서버 실행 중 → http://localhost:${PORT}`);
