@@ -33,6 +33,18 @@ for (const file of ['peerjs.min.js', 'peerjs.min.js.map']) {
 // 4) 실행 모드 결정 — 중앙 서버 주소가 주어지면 server 모드, 없으면 p2p 폴백
 const serverUrl = (process.env.POKER_SERVER_URL || '').trim().replace(/\/+$/, '');
 
+/*
+ * 서버 주소 없이 구우면 사이트가 조용히 P2P 폴백으로 되돌아간다.
+ * 눈에 띄지 않은 채 배포되면 "접속이 안 된다"로만 돌아오므로, 자동 배포에서는
+ * 폴백을 기본값으로 삼지 않는다. 정말 서버 없이 굽고 싶으면 ALLOW_P2P_FALLBACK=1.
+ */
+if (!serverUrl && process.env.CI && !process.env.ALLOW_P2P_FALLBACK) {
+  console.error('POKER_SERVER_URL 이 비어 있습니다.');
+  console.error('저장소 Settings > Secrets and variables > Actions > Variables 에 서버 주소를 넣어 주세요.');
+  console.error('서버 없이 P2P 폴백으로 굽는 것이 의도라면 ALLOW_P2P_FALLBACK=1 을 함께 지정하세요.');
+  process.exit(1);
+}
+
 if (serverUrl && !/^https:\/\//.test(serverUrl)) {
   console.error(`POKER_SERVER_URL 은 https:// 로 시작해야 합니다 (받은 값: ${serverUrl})`);
   console.error('GitHub Pages 는 https 라서 http 서버를 부르면 브라우저가 차단합니다.');

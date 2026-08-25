@@ -18,9 +18,12 @@ const PORT = process.env.PORT || 3000;
 const ROOM_TTL_MS = Number(process.env.ROOM_TTL_HOURS || 24) * 60 * 60 * 1000;
 const MAX_ROOMS = Number(process.env.MAX_ROOMS || 500);
 const ROOMS_PER_IP = Number(process.env.ROOMS_PER_IP || 20); // 10분 창 기준
-// 연결이 끊긴 사람을 자리에서 내보내기까지의 유예 시간. 0 이면 내보내지 않는다.
+// 연결이 끊긴 사람을 자리비움 처리하기까지의 유예 시간. 0 이면 처리하지 않는다.
 const DISCONNECT_GRACE_SEC = process.env.DISCONNECT_GRACE_SEC;
 const SAVE_INTERVAL_MS = 15000;
+// 핑 → 폰 대기 → 다음 핑에서 정리. 끊긴 소켓이 늦어도 이 두 배 안에 감지된다.
+const HEARTBEAT_MS = 15000;
+const JANITOR_MS = 30000;
 
 // 비워 두면 모든 출처를 허용한다. 배포 후에는 Pages 주소만 남기는 편이 안전하다.
 //   ALLOWED_ORIGINS=https://jjazzking.github.io
@@ -92,10 +95,10 @@ function normalizeConfig(body = {}) {
     startingStack: clampInt(body.startingStack, bigBlind, 100000000, bigBlind * 100),
     maxPlayers: clampInt(body.maxPlayers, 2, 9, 9),
     actionTime: clampInt(body.actionTime, 0, 600, 60),
-    // 운영자가 정한다. 지정하지 않으면 Table 의 기본값(60초)을 쓴다.
+    // 운영자가 정한다. 지정하지 않으면 Table 의 기본값(30초)을 쓴다.
     ...(DISCONNECT_GRACE_SEC === undefined
       ? {}
-      : { disconnectGrace: clampInt(DISCONNECT_GRACE_SEC, 0, 3600, 60) * 1000 }),
+      : { disconnectGrace: clampInt(DISCONNECT_GRACE_SEC, 0, 3600, 30) * 1000 }),
   };
 }
 
@@ -337,8 +340,8 @@ function restoreRooms() {
   if (restored) console.log(`[store] 방 ${restored}개 복원됨 (${store.FILE})`);
 }
 
-/* 죽은 소켓 정리 + 빈 방 청소 + 저장 */
-const janitor = setInterval(() => {
+/* 죽은 소켓 정리 — 청소 주기와 묶어 두면 끊김 감지가 최대 두 배로 늦어진다 */
+const heartbeat = setInterval(() => {
   for (const ws of wss.clients) {
     if (ws.isAlive === false) {
       ws.terminate();
@@ -347,7 +350,11 @@ const janitor = setInterval(() => {
     ws.isAlive = false;
     ws.ping();
   }
+}, HEARTBEAT_MS);
+heartbeat.unref();
 
+/* 빈 방 청소 + 저장 */
+const janitor = setInterval(() => {
   const now = Date.now();
   for (const [id, table] of rooms) {
     const set = sockets.get(id);
@@ -358,7 +365,7 @@ const janitor = setInterval(() => {
   for (const [ip, entry] of createdByIp) {
     if (now > entry.resetAt) createdByIp.delete(ip);
   }
-}, 30000);
+}, JANITOR_MS);
 janitor.unref();
 
 const saver = setInterval(() => persist(false), SAVE_INTERVAL_MS);
@@ -372,6 +379,7 @@ function shutdown(signal) {
   shuttingDown = true;
   console.log(`\n[server] ${signal} 수신 — 상태를 저장하고 종료합니다`);
 
+  clearInterval(heartbeat);
   clearInterval(janitor);
   clearInterval(saver);
   persist(true);

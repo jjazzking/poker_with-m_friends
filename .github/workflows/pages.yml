@@ -6,8 +6,13 @@ on:
       - main
       - master
       # 작업 중인 브랜치들. main 으로 합친 뒤에는 지워도 됩니다.
+      #
+      # 주의: 여기 적힌 브랜치는 어느 것이든 푸시되는 순간 사이트 전체를 덮어씁니다.
+      # 서버 모드 코드가 없는 옛 브랜치를 남겨 두면, 거기에 커밋 한 번만 올라가도
+      # 사이트가 P2P 폴백으로 되돌아갑니다(실제로 2026-08-25 에 그렇게 됐습니다).
+      # 합치고 난 브랜치는 반드시 이 목록에서 지워 주세요.
+      - claude/latest-version-connection-issue-6330c2
       - claude/poker-multiplayer-site-eo2rds
-      - claude/screen-access-issue-4rjjck
   workflow_dispatch:
 
 # Pages 배포에 필요한 권한

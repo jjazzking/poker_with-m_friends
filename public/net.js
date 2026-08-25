@@ -302,6 +302,20 @@
         broadcast();
       });
 
+      /*
+       * 시그널링 소켓은 탭을 잠깐 내리거나 네트워크가 한 번 끊기기만 해도 떨어진다.
+       * 이때 다시 붙지 않으면 이미 연결된 사람들만 남고, 새로 들어오는 사람에게는
+       * 방장이 영영 보이지 않는다("방장이 접속해 있지 않습니다").
+       */
+      peer.on('disconnected', () => {
+        if (peer.destroyed) return;
+        try {
+          peer.reconnect();
+        } catch (_) {
+          setTimeout(openPeer, 1500);
+        }
+      });
+
       peer.on('error', (err) => {
         if (err.type === 'unavailable-id') {
           if (idAttempts++ < 6) {
@@ -316,6 +330,7 @@
           }
         } else if (err.type === 'network' || err.type === 'server-error') {
           handlers.onError('시그널링 서버 연결이 불안정합니다. 다시 시도합니다…');
+          if (!peer.destroyed) setTimeout(() => !peer.destroyed && peer.disconnected && peer.reconnect(), 2000);
         } else if (err.type !== 'peer-unavailable') {
           handlers.onError('연결 오류: ' + err.type);
         }
@@ -420,6 +435,15 @@
         });
       });
 
+      peer.on('disconnected', () => {
+        if (peer.destroyed || stopped) return;
+        try {
+          peer.reconnect();
+        } catch (_) {
+          retry();
+        }
+      });
+
       peer.on('error', (err) => {
         if (err.type === 'peer-unavailable') {
           if (attempts === 0) handlers.onError('방장이 접속해 있지 않습니다. 다시 시도합니다…');
@@ -433,16 +457,31 @@
       });
     };
 
+    /*
+     * 한 번의 실패가 conn.close 와 peer.error 로 두 번 들어오는 일이 흔하다.
+     * 그때마다 예약하면 Peer 가 2 → 4 → 8 개로 불어나 시그널링 서버에서
+     * 막혀 버리므로, 예약은 항상 하나만 살아 있게 한다.
+     */
+    let retryTimer = null;
+    let stopped = false;
+
     const retry = () => {
-      if (attempts > 40) return handlers.onFatal('방장과 연결할 수 없습니다. 방장이 페이지를 열어 두었는지 확인해 주세요.');
+      if (stopped || retryTimer) return;
+      if (attempts > 40) {
+        stopped = true;
+        return handlers.onFatal('방장과 연결할 수 없습니다. 방장이 페이지를 열어 두었는지 확인해 주세요.');
+      }
       const wait = Math.min(1000 * 2 ** Math.min(attempts, 3), 8000);
       attempts++;
-      setTimeout(() => {
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        if (stopped) return;
         try {
           if (peer && !peer.destroyed) peer.destroy();
         } catch (_) {
           /* 이미 정리됨 */
         }
+        conn = null;
         connect();
       }, wait);
     };
@@ -451,6 +490,16 @@
 
     Net.send = (msg) => {
       if (conn && conn.open) conn.send(msg);
+      if (msg && msg.type === 'leave') {
+        stopped = true;
+        clearTimeout(retryTimer);
+        retryTimer = null;
+        try {
+          if (peer && !peer.destroyed) peer.destroy();
+        } catch (_) {
+          /* 이미 정리됨 */
+        }
+      }
     };
   }
 

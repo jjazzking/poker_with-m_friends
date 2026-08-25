@@ -184,7 +184,7 @@ function listen(server) {
     );
   });
 
-  await test('연결이 끊기면 표시됐다가 유예 시간 뒤 자리에서 빠진다', async () => {
+  await test('연결이 끊기면 표시됐다가 유예 시간 뒤 자리비움 처리된다', async () => {
     const table = srv.rooms.get(roomId);
     assert.ok(table, '방이 살아 있어야 한다');
     assert.strictEqual(table.players.size, 2, '끊기자마자 사라지지는 않는다');
@@ -196,10 +196,16 @@ function listen(server) {
     );
     assert.ok(
       [...table.players.values()].every((p) => p.dropAt > Date.now() - 1000),
-      '퇴장 예정 시각이 잡혀야 한다'
+      '자리비움 예정 시각이 잡혀야 한다'
     );
 
-    await waitFor(() => table.players.size === 0, '유예 시간이 지나면 자리에서 빠진다', 6000);
+    await waitFor(
+      () => [...table.players.values()].every((p) => p.sittingOut),
+      '유예 시간이 지나면 자리비움 처리된다',
+      6000
+    );
+    // 자리와 스택은 남겨 둬야 돌아왔을 때 이어서 칠 수 있다
+    assert.strictEqual(table.players.size, 2, '자리에서 빼지는 않는다');
   });
 
   await test('돌아오면 자리를 지킨다', async () => {
@@ -229,7 +235,7 @@ function listen(server) {
 
     const second = await connect(); // 유예 시간 안에 복귀
     await waitFor(() => table.players.get('back').connected, '다시 연결되어야 한다');
-    assert.strictEqual(table.players.get('back').dropAt, null, '퇴장 예약이 취소되어야 한다');
+    assert.strictEqual(table.players.get('back').dropAt, null, '자리비움 예약이 취소되어야 한다');
 
     await new Promise((r) => setTimeout(r, 1500)); // 원래 유예 시간이 지나도
     assert.ok(table.players.has('back'), '돌아온 사람을 쫓아내면 안 된다');
@@ -276,10 +282,11 @@ function listen(server) {
     assert.deepStrictEqual(after, before, '이름과 스택이 그대로여야 한다');
     assert.strictEqual(restored.config.name, '복원테스트');
 
-    // 복원된 사람은 끊긴 상태지만, 돌아올 틈도 없이 쫓겨나면 안 된다
+    // 복원된 사람은 끊긴 상태다. 돌아오지 않으면 자리비움이 되지만
+    // 자리와 스택은 남으므로, 돌아올 틈도 없이 테이블이 비어 버리지는 않는다.
     assert.ok(
-      [...restored.players.values()].every((p) => !p.connected && p.dropAt === null),
-      '복원 직후에는 퇴장 예약이 걸려 있지 않아야 한다'
+      [...restored.players.values()].every((p) => !p.connected),
+      '복원 직후에는 아직 아무도 붙어 있지 않다'
     );
   });
 

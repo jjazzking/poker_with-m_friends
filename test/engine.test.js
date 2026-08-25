@@ -408,21 +408,92 @@ testAsync('랜덤 봇 300핸드: 칩 총량 보존 + 규칙 위반 없음', asyn
 
 /* ------------------------------------------------- 연결 끊김 자동 퇴장 */
 
-testAsync('연결이 끊기면 유예 시간 뒤에 자리에서 나간다', async () => {
+testAsync('연결이 끊기면 유예 시간 뒤에 자리비움 처리된다', async () => {
+  const t = makeTable({ disconnectGrace: 60 });
+  t.addPlayer('a', '앨리스');
+  t.addPlayer('b', '밥');
+  const stack = t.players.get('b').stack;
+
+  t.setConnected('b', false);
+  assert.strictEqual(t.players.get('b').sittingOut, false, '유예 시간 동안에는 그대로 둔다');
+  assert.ok(t.players.get('b').dropAt > Date.now(), '자리비움 예정 시각이 잡혀야 한다');
+
+  await new Promise((r) => setTimeout(r, 140));
+  const b = t.players.get('b');
+  assert.ok(b, '자리에서 빼지는 않는다 — 스택을 지켜 준다');
+  assert.strictEqual(b.sittingOut, true, '유예 시간이 지나면 자리비움이 되어야 한다');
+  assert.strictEqual(b.autoSatOut, true, '자동으로 비워진 자리로 표시된다');
+  assert.strictEqual(b.stack, stack, '스택은 그대로여야 한다');
+  assert.ok(
+    t.log.some((l) => l.text.includes('자리비움 처리')),
+    '왜 비워졌는지 기록이 남아야 한다'
+  );
+  t.dispose();
+});
+
+testAsync('자동으로 비워진 자리는 재접속하면 다시 참가한다', async () => {
   const t = makeTable({ disconnectGrace: 60 });
   t.addPlayer('a', '앨리스');
   t.addPlayer('b', '밥');
 
   t.setConnected('b', false);
-  assert.ok(t.players.has('b'), '유예 시간 동안에는 자리에 남아 있어야 한다');
-  assert.ok(t.players.get('b').dropAt > Date.now(), '퇴장 예정 시각이 잡혀야 한다');
-
   await new Promise((r) => setTimeout(r, 140));
-  assert.ok(!t.players.has('b'), '유예 시간이 지나면 자리에서 빠져야 한다');
-  assert.ok(
-    t.log.some((l) => l.text.includes('연결이 끊겨')),
-    '왜 나갔는지 기록이 남아야 한다'
-  );
+  assert.strictEqual(t.players.get('b').sittingOut, true, '먼저 자리비움이 되어야 한다');
+
+  t.setConnected('b', true);
+  const b = t.players.get('b');
+  assert.strictEqual(b.sittingOut, false, '돌아왔으면 다시 참가시켜야 한다');
+  assert.strictEqual(b.autoSatOut, false, '자동 표시도 지워야 한다');
+  t.dispose();
+});
+
+testAsync('직접 고른 자리비움은 재접속해도 유지된다', async () => {
+  const t = makeTable({ disconnectGrace: 60 });
+  t.addPlayer('a', '앨리스');
+  t.addPlayer('b', '밥');
+
+  t.setSitOut('b', true); // 본인이 골랐다
+  t.setConnected('b', false);
+  await new Promise((r) => setTimeout(r, 140));
+  t.setConnected('b', true);
+
+  assert.strictEqual(t.players.get('b').sittingOut, true, '본인이 고른 자리비움을 뒤집으면 안 된다');
+  t.dispose();
+});
+
+testAsync('진행 중인 핸드를 붙잡고 있으면 폴드 처리된다', async () => {
+  const t = makeTable({ disconnectGrace: 60 });
+  t.addPlayer('a', '앨리스');
+  t.addPlayer('b', '밥');
+  t.addPlayer('c', '캐럴');
+  t.startHand();
+
+  const actor = t.seatedPlayers().find((p) => p.seat === t.actorSeat);
+  t.setConnected(actor.token, false);
+  await new Promise((r) => setTimeout(r, 140));
+
+  assert.strictEqual(actor.folded, true, '차례를 붙잡고 있으면 폴드시켜야 한다');
+  assert.ok(t.actorSeat !== actor.seat, '다음 사람으로 넘어가야 한다');
+  t.dispose();
+});
+
+testAsync('연결 끊김 폴드로 혼자 남으면 핸드가 끝난다', async () => {
+  const t = makeTable({ disconnectGrace: 60 });
+  t.addPlayer('a', '앨리스');
+  t.addPlayer('b', '밥');
+  t.autoNext = false;
+  t.startHand();
+  assert.strictEqual(t.status, 'playing', '핸드가 시작되어야 한다');
+
+  for (const p of t.seatedPlayers()) t.setConnected(p.token, false);
+  await new Promise((r) => setTimeout(r, 140));
+
+  let guard = 0;
+  while (t.status === 'playing') {
+    await tick();
+    if (++guard > 400) throw new Error('핸드가 끝나지 않는다');
+  }
+  assert.strictEqual(t.pot(), 0, '팟이 정산되어야 한다');
   t.dispose();
 });
 
@@ -436,8 +507,8 @@ testAsync('유예 시간 안에 돌아오면 자리를 지킨다', async () => {
   t.setConnected('b', true); // 새로고침하고 돌아옴
 
   await new Promise((r) => setTimeout(r, 120));
-  assert.ok(t.players.has('b'), '돌아왔으면 쫓아내면 안 된다');
-  assert.strictEqual(t.players.get('b').dropAt, null, '퇴장 예약이 취소되어야 한다');
+  assert.strictEqual(t.players.get('b').sittingOut, false, '돌아왔으면 아무 일도 없어야 한다');
+  assert.strictEqual(t.players.get('b').dropAt, null, '자리비움 예약이 취소되어야 한다');
   t.dispose();
 });
 
@@ -483,7 +554,7 @@ testAsync('핸드 중에 나가도 팟에 넣은 칩이 사라지지 않는다',
   t.dispose();
 });
 
-testAsync('방장이 끊겨서 나가면 방장이 넘어간다', async () => {
+testAsync('방장이 끊기면 자리는 지키되 방장은 넘어간다', async () => {
   const t = makeTable({ disconnectGrace: 60 });
   t.addPlayer('a', '앨리스');
   t.addPlayer('b', '밥');
@@ -491,8 +562,8 @@ testAsync('방장이 끊겨서 나가면 방장이 넘어간다', async () => {
 
   t.setConnected('a', false);
   await new Promise((r) => setTimeout(r, 140));
-  assert.ok(!t.players.has('a'), '방장도 예외 없이 나간다');
-  assert.strictEqual(t.hostToken, 'b', '남은 사람에게 방장이 넘어가야 한다');
+  assert.ok(t.players.has('a'), '방장이라고 자리에서 빼지는 않는다');
+  assert.strictEqual(t.hostToken, 'b', '남은 사람이 게임을 이어갈 수 있어야 한다');
   t.dispose();
 });
 
