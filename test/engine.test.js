@@ -403,7 +403,107 @@ testAsync('랜덤 봇 300핸드: 칩 총량 보존 + 규칙 위반 없음', asyn
 
   assert.strictEqual(hands, 300, `300핸드가 모두 진행되어야 한다 (진행: ${hands})`);
   console.log(`    → ${hands}핸드 진행, 칩 총량 검증 통과`);
-  t.clearTimers();
+  t.dispose();
+});
+
+/* ------------------------------------------------- 연결 끊김 처리 */
+
+console.log('\n연결 끊김');
+
+const waitFor = async (fn, label) => {
+  for (let i = 0; i < 200; i++) {
+    if (fn()) return;
+    await tick();
+  }
+  throw new Error(label);
+};
+
+testAsync('유예 시간이 지나면 자리비움 + 진행 중인 핸드는 폴드된다', async () => {
+  const t = makeTable({ disconnectGrace: 20 });
+  t.autoNext = false;
+  t.addPlayer('t1', 'A');
+  t.addPlayer('t2', 'B');
+  t.addPlayer('t3', 'C');
+  t.startHand();
+
+  const btn = t.playerAtSeat(t.buttonSeat);
+  assert.strictEqual(t.actorSeat, btn.seat, '3인에서는 버튼이 선액션');
+
+  t.setConnected(btn.token, false);
+  assert.strictEqual(btn.folded, false, '유예 시간 안에는 그대로 둔다');
+  assert.strictEqual(btn.sittingOut, false);
+
+  await waitFor(() => btn.folded, '유예 시간이 지나도 폴드되지 않았습니다');
+  assert.strictEqual(btn.sittingOut, true, '자리비움 처리되어야 한다');
+  assert.notStrictEqual(t.actorSeat, btn.seat, '차례가 다음 사람에게 넘어가야 한다');
+  t.dispose();
+});
+
+testAsync('유예 시간 안에 다시 붙으면 아무 일도 일어나지 않는다', async () => {
+  const t = makeTable({ disconnectGrace: 60 });
+  t.autoNext = false;
+  t.addPlayer('t1', 'A');
+  t.addPlayer('t2', 'B');
+  t.startHand();
+  const p = t.players.get('t1');
+
+  t.setConnected('t1', false);
+  t.setConnected('t1', true);
+  await waitFor(() => Date.now() > 0 && t.disconnectTimers.size === 0, '타이머가 정리되지 않았습니다');
+  for (let i = 0; i < 20; i++) await tick();
+
+  assert.strictEqual(p.connected, true);
+  assert.strictEqual(p.folded, false, '다시 붙었으면 폴드되면 안 된다');
+  assert.strictEqual(p.sittingOut, false);
+  t.dispose();
+});
+
+testAsync('자동 자리비움된 플레이어는 재접속하면 다시 참가한다', async () => {
+  const t = makeTable({ disconnectGrace: 20 });
+  t.autoNext = false;
+  t.addPlayer('t1', 'A');
+  t.addPlayer('t2', 'B');
+  const p = t.players.get('t1');
+
+  t.setConnected('t1', false);
+  await waitFor(() => p.sittingOut, '자리비움 처리되지 않았습니다');
+
+  t.setConnected('t1', true);
+  assert.strictEqual(p.sittingOut, false, '재접속하면 자동 자리비움은 풀린다');
+  assert.strictEqual(t.eligiblePlayers().length, 2);
+  t.dispose();
+});
+
+testAsync('직접 고른 자리비움은 재접속해도 유지된다', async () => {
+  const t = makeTable({ disconnectGrace: 20 });
+  t.autoNext = false;
+  t.addPlayer('t1', 'A');
+  t.addPlayer('t2', 'B');
+  const p = t.players.get('t1');
+
+  t.setSitOut('t1', true);
+  t.setConnected('t1', false);
+  await waitFor(() => t.disconnectTimers.size === 0, '유예 타이머가 끝나지 않았습니다');
+  t.setConnected('t1', true);
+
+  assert.strictEqual(p.sittingOut, true, '직접 비운 자리는 그대로 유지');
+  t.dispose();
+});
+
+testAsync('마지막 한 명만 남으면 연결 끊김 폴드로도 핸드가 끝난다', async () => {
+  const t = makeTable({ disconnectGrace: 20 });
+  t.autoNext = false;
+  t.addPlayer('t1', 'A');
+  t.addPlayer('t2', 'B');
+  t.startHand();
+  const actor = t.playerAtSeat(t.actorSeat);
+  const other = t.seatedPlayers().find((p) => p.seat !== actor.seat);
+
+  t.setConnected(other.token, false); // 차례가 아닌 쪽이 끊긴다
+  await waitFor(() => other.folded, '연결 끊김 폴드가 처리되지 않았습니다');
+  assert.notStrictEqual(t.status, 'playing', '남은 한 명이 팟을 가져가고 핸드가 끝나야 한다');
+  assert.ok(actor.stack > 10000, `남은 한 명이 팟을 가져가야 한다 (stack=${actor.stack})`);
+  t.dispose();
 });
 
 process.on('exit', () => {

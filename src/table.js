@@ -10,6 +10,7 @@ const MAX_SEATS = 9;
 const SHOWDOWN_DELAY = 6000;
 const FOLD_END_DELAY = 2500;
 const RUNOUT_DELAY = 1400;
+const DISCONNECT_GRACE_MS = 30000; // 연결이 끊긴 채 이만큼 지나면 자동 폴드 + 자리비움
 
 let nextPlayerId = 1;
 
@@ -47,7 +48,10 @@ class Table {
       showdown: config.showdownDelay ?? SHOWDOWN_DELAY,
       fold: config.foldDelay ?? FOLD_END_DELAY,
       runout: config.runoutDelay ?? RUNOUT_DELAY,
+      disconnect: config.disconnectGrace ?? DISCONNECT_GRACE_MS,
     };
+    /** token -> Timeout. 핸드 타이머(this.timers)와 달리 액션마다 초기화되지 않는다 */
+    this.disconnectTimers = new Map();
   }
 
   /* ------------------------------------------------------------ 플레이어 */
@@ -70,6 +74,8 @@ class Table {
       seat,
       stack,
       connected: true,
+      disconnectedAt: null,
+      autoSatOut: false, // 연결 끊김 때문에 자리비움된 경우에만 true
       sittingOut: false,
       // 핸드 단위 상태
       inHand: false,
@@ -88,8 +94,8 @@ class Table {
   addPlayer(token, name) {
     const existing = this.players.get(token);
     if (existing) {
-      existing.connected = true;
       existing.name = name || existing.name;
+      this.markReconnected(existing);
       this.touch();
       return existing;
     }
@@ -128,9 +134,9 @@ class Table {
     for (const s of snap.players) {
       if (this.players.has(s.token) || s.seat >= this.config.maxPlayers) continue;
       const p = this.makePlayer(s.token, s.name, s.seat, Math.max(0, Math.floor(s.stack) || 0));
-      p.connected = false; // 실제로 다시 붙을 때까지는 끊긴 상태로 둔다
       p.sittingOut = !!s.sittingOut;
       this.players.set(s.token, p);
+      this.markDisconnected(p); // 실제로 다시 붙을 때까지는 끊긴 상태로 둔다
     }
     this.handNo = Number(snap.handNo) || 0;
     this.buttonSeat = typeof snap.buttonSeat === 'number' ? snap.buttonSeat : null;
@@ -141,6 +147,7 @@ class Table {
   removePlayer(token) {
     const p = this.players.get(token);
     if (!p) return;
+    this.cancelDisconnectTimer(token);
     if (p.inHand && this.status === 'playing' && !p.folded) {
       // 진행 중인 핸드에서는 폴드 처리 후 정리
       p.folded = true;
@@ -167,7 +174,69 @@ class Table {
   setConnected(token, connected) {
     const p = this.players.get(token);
     if (!p) return;
-    p.connected = connected;
+    if (connected) this.markReconnected(p);
+    else this.markDisconnected(p);
+    this.touch();
+  }
+
+  /* -------------------------------------------------- 연결 끊김 유예 시간 */
+
+  markDisconnected(p) {
+    if (!p.connected && p.disconnectedAt) return; // 이미 카운트다운 중
+    p.connected = false;
+    p.disconnectedAt = Date.now();
+    this.cancelDisconnectTimer(p.token);
+    const t = setTimeout(() => {
+      this.disconnectTimers.delete(p.token);
+      this.dropDisconnected(p.token);
+    }, this.delays.disconnect);
+    if (typeof t.unref === 'function') t.unref();
+    this.disconnectTimers.set(p.token, t);
+  }
+
+  markReconnected(p) {
+    this.cancelDisconnectTimer(p.token);
+    p.connected = true;
+    p.disconnectedAt = null;
+    if (!p.autoSatOut) return;
+    // 연결이 끊겨서 자리비움된 경우에만 자동으로 다시 참가시킨다
+    p.autoSatOut = false;
+    p.sittingOut = false;
+    this.pushLog(`${p.name} 님이 다시 연결되어 참가합니다.`);
+    this.maybeAutoStart();
+  }
+
+  cancelDisconnectTimer(token) {
+    const t = this.disconnectTimers.get(token);
+    if (!t) return;
+    clearTimeout(t);
+    this.disconnectTimers.delete(token);
+  }
+
+  /** 유예 시간이 지난 뒤에도 끊겨 있으면 진행 중인 핸드는 폴드하고 자리를 비운다 */
+  dropDisconnected(token) {
+    const p = this.players.get(token);
+    if (!p || p.connected) return;
+
+    if (!p.sittingOut) {
+      p.sittingOut = true;
+      p.autoSatOut = true;
+      const secs = Math.round(this.delays.disconnect / 1000);
+      this.pushLog(`${p.name} 님의 연결이 ${secs}초 이상 끊겨 자리비움 처리되었습니다.`);
+    }
+
+    const inLiveHand = this.status === 'playing' && p.inHand && !p.folded;
+    if (!inLiveHand) {
+      this.touch();
+      return;
+    }
+
+    p.folded = true;
+    p.hasActed = true;
+    p.lastAction = '폴드';
+    this.pushLog(`${p.name} 님이 연결 끊김으로 폴드 처리되었습니다.`);
+    if (this.actorSeat === p.seat) this.advance();
+    else this.checkAloneWinner();
     this.touch();
   }
 
@@ -175,6 +244,7 @@ class Table {
     const p = this.players.get(token);
     if (!p) return;
     p.sittingOut = !!value;
+    p.autoSatOut = false; // 직접 고른 자리비움은 재접속해도 유지한다
     this.pushLog(`${p.name} 님이 ${value ? '자리를 비웠습니다' : '다시 참가합니다'}.`);
     if (!value && this.status === 'waiting') this.maybeAutoStart();
     this.touch();
@@ -187,7 +257,10 @@ class Table {
     if (!amt) return;
     if (p.inHand && this.status === 'playing') throw new Error('핸드가 끝난 뒤에 칩을 추가할 수 있습니다');
     p.stack += amt;
-    if (p.sittingOut) p.sittingOut = false; // 칩을 넣었으면 다시 참가 상태로
+    if (p.sittingOut) {
+      p.sittingOut = false; // 칩을 넣었으면 다시 참가 상태로
+      p.autoSatOut = false;
+    }
     this.pushLog(`${p.name} 님이 ${amt.toLocaleString()} 칩을 추가했습니다.`);
     this.maybeAutoStart();
     this.touch();
@@ -243,6 +316,13 @@ class Table {
     for (const t of this.timers) clearTimeout(t);
     this.timers = [];
     this.deadline = null;
+  }
+
+  /** 방을 정리할 때만 호출 — 액션 진행과 무관한 연결 끊김 타이머까지 모두 없앤다 */
+  dispose() {
+    this.clearTimers();
+    for (const t of this.disconnectTimers.values()) clearTimeout(t);
+    this.disconnectTimers.clear();
   }
 
   later(fn, ms) {
@@ -762,6 +842,7 @@ class Table {
         allIn: p.allIn,
         inHand: p.inHand,
         connected: p.connected,
+        disconnectedAt: p.disconnectedAt,
         sittingOut: p.sittingOut,
         isHost: p.token === this.hostToken,
         isMe: !!isMe,
@@ -782,6 +863,7 @@ class Table {
         startingStack: this.config.startingStack,
         maxPlayers: this.config.maxPlayers,
         actionTime: this.config.actionTime,
+        disconnectGrace: this.delays.disconnect,
       },
       status: this.status,
       street: this.street,
