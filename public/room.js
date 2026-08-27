@@ -282,6 +282,7 @@ function render() {
   renderSeats();
   renderResults();
   renderMadeHand();
+  renderWinOverlay();
   renderLog();
   renderActions();
   syncTurnSignals();
@@ -296,13 +297,127 @@ function renderMadeHand() {
   }
   el.hidden = false;
   $('#mh-name').textContent = made.name;
-  $('#mh-cards').innerHTML = made.cards
-    .map((c) => {
-      const suit = c.slice(-1);
-      const red = suit === 'h' || suit === 'd';
-      return `<span class="mh-card${red ? ' red' : ''}">${escapeHtml(c.slice(0, -1))}${SUIT_SYMBOL[suit] || ''}</span>`;
+  // 보드/홀카드와 같은 카드 모양으로 크게 보여 준다.
+  // 여기 있는 카드는 전부 '내 패를 이루는 카드'라, 초록 테두리는 오히려 산만해서 뺀다.
+  const cards = $('#mh-cards');
+  cards.innerHTML = '';
+  for (const c of made.cards) {
+    const card = cardEl(c);
+    card.classList.remove('used');
+    cards.appendChild(card);
+  }
+}
+
+/* ------------------------------------------------- 핸드 결과(승리) 화면 */
+
+let winShownKey = null;   // 이미 띄운 결과 (같은 핸드에서 다시 띄우지 않도록)
+let winHideTimer = null;
+
+/** 이번 핸드의 결과를 한 덩어리로 요약한다 (팟이 여러 개면 사람별로 합친다) */
+function winSummary() {
+  if (!state || state.status !== 'showdown' || !state.results) return null;
+  const pots = state.results.pots || [];
+  if (!pots.length) return null;
+
+  const byId = new Map();
+  for (const pot of pots) {
+    for (const w of pot.winners) {
+      const cur = byId.get(w.id) || { id: w.id, name: w.name, hand: null, share: 0 };
+      cur.share += w.share;
+      if (w.hand) cur.hand = w.hand;
+      byId.set(w.id, cur);
+    }
+  }
+
+  const winners = [...byId.values()].sort((a, b) => b.share - a.share);
+  const mine = state.you ? byId.get(state.you.id) : null;
+  return {
+    key: `${state.handNo}|${winners.map((w) => `${w.id}:${w.share}`).join(',')}`,
+    winners,
+    iWon: !!mine,
+    myShare: mine ? mine.share : 0,
+    total: pots.reduce((sum, pot) => sum + pot.amount, 0),
+    showdown: !!state.results.showdown,
+  };
+}
+
+function renderWinOverlay() {
+  const sum = winSummary();
+  if (!sum) {
+    if (winShownKey) {
+      winShownKey = null;
+      hideWinOverlay();
+    }
+    return;
+  }
+  if (sum.key === winShownKey) return; // 같은 결과가 상태 갱신마다 다시 튀지 않게
+  showWinOverlay(sum);
+}
+
+function showWinOverlay(sum) {
+  winShownKey = sum.key;
+  clearTimeout(winHideTimer);
+  winHideTimer = null;
+
+  const overlay = $('#win-overlay');
+  const card = $('#win-card');
+  const many = sum.winners.length > 1;
+
+  const heading = sum.iWon
+    ? many ? '분할 승리!' : '승리!'
+    : many ? '팟 분할' : `${sum.winners[0].name} 승리`;
+
+  const rows = sum.winners
+    .map((w) => {
+      const p = state.players.find((x) => x.id === w.id);
+      const shown = p && p.cards.length && p.cards[0] !== '??' ? p.cards : [];
+      return `
+        <div class="win-row${state.you && w.id === state.you.id ? ' me' : ''}">
+          <span class="wr-name">${escapeHtml(w.name)}</span>
+          ${w.hand ? `<span class="wr-hand">${escapeHtml(w.hand)}</span>` : ''}
+          <span class="wr-cards">${shown.map(miniCardHtml).join('')}</span>
+          <span class="wr-share">+${fmt(w.share)}</span>
+        </div>`;
     })
     .join('');
+
+  card.className = 'win-card' + (sum.iWon ? ' mine' : '');
+  card.innerHTML = `
+    <div class="win-badge">${sum.iWon ? '🏆' : '♠'}</div>
+    <div class="win-title">${escapeHtml(heading)}</div>
+    <div class="win-amount">${sum.iWon ? '+' : ''}${fmt(sum.iWon ? sum.myShare : sum.total)}<span class="win-unit">칩</span></div>
+    <div class="win-rows">${rows}</div>
+    <div class="win-foot">${sum.showdown ? `팟 ${fmt(sum.total)}` : '모두 폴드'} · 누르면 닫힙니다</div>
+  `;
+
+  overlay.hidden = false;
+  requestAnimationFrame(() => overlay.classList.add('show'));
+
+  // 쇼다운이 끝나기 전에 스스로 비켜 줘서, 공개된 카드를 볼 시간이 남게 한다
+  winHideTimer = setTimeout(hideWinOverlay, sum.showdown ? 3400 : 1800);
+}
+
+function hideWinOverlay() {
+  clearTimeout(winHideTimer);
+  winHideTimer = null;
+  const overlay = $('#win-overlay');
+  if (overlay.hidden) return;
+  overlay.classList.remove('show');
+  winHideTimer = setTimeout(() => {
+    overlay.hidden = true;
+    winHideTimer = null;
+  }, 220);
+}
+
+/** 결과 화면에 넣는 작은 카드 (문자열이라 innerHTML 로 붙일 수 있다) */
+function miniCardHtml(code) {
+  const suit = code.slice(-1);
+  const rank = code.slice(0, -1);
+  const cls =
+    'card mini' +
+    (suit === 'h' || suit === 'd' ? ' red' : '') +
+    (rank.length > 1 ? ' wide-rank' : '');
+  return `<span class="${cls}"><span class="r">${escapeHtml(rank)}</span><span class="s">${SUIT_SYMBOL[suit] || ''}</span></span>`;
 }
 
 function renderSeats() {
@@ -797,9 +912,13 @@ $('#chat-form').addEventListener('submit', (e) => {
   input.value = '';
 });
 
+// 결과 화면은 눌러서 바로 치울 수 있다 (다음 핸드를 기다리지 않아도 되도록)
+$('#win-overlay').addEventListener('click', hideWinOverlay);
+
 // 키보드 단축키: F 폴드 / C 콜·체크 / R 레이즈
 document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.key === 'Escape') return hideWinOverlay();
   if (!state?.legal) return;
   const k = e.key.toLowerCase();
   if (k === 'f') $('#btn-fold').click();

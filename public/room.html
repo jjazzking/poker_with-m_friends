@@ -71,8 +71,10 @@
 
 <footer class="actionbar" id="actionbar">
   <div class="made-hand" id="made-hand" hidden>
-    <span class="mh-label">내 패</span>
-    <b id="mh-name"></b>
+    <div class="mh-text">
+      <span class="mh-label">내 패</span>
+      <b id="mh-name"></b>
+    </div>
     <span class="mh-cards" id="mh-cards"></span>
   </div>
 
@@ -122,6 +124,11 @@
     </div>
   </div>
 </footer>
+
+<!-- 핸드가 끝나면 크게 띄우는 결과 화면 -->
+<div class="win-overlay" id="win-overlay" hidden>
+  <div class="win-card" id="win-card"></div>
+</div>
 
 <div class="toast" id="toast" hidden></div>
 <script src="config.js"></script>
