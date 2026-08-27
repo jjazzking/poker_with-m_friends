@@ -579,8 +579,12 @@ function renderActions() {
     const canStart = state.you && state.you.isHost && state.status === 'waiting';
     const seated = state.players.filter((p) => !p.sittingOut && p.stack > 0).length;
     $('#start-btn').hidden = !(canStart && seated >= 2);
+    // 올인으로 액션이 끝나면 아무도 기다릴 사람이 없다 (공개 → 보드 러너)
+    const runout = state.status === 'playing' && state.actorSeat === null;
     $('#waiting-text').textContent =
-      state.status === 'playing'
+      runout
+        ? '올인 — 남은 보드를 봅니다…'
+        : state.status === 'playing'
         ? '다른 플레이어의 액션을 기다리는 중…'
         : state.status === 'showdown'
         ? '핸드 종료 — 잠시 후 다음 핸드가 시작됩니다.'

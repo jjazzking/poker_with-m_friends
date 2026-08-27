@@ -10,6 +10,10 @@ const MAX_SEATS = 9;
 const SHOWDOWN_DELAY = 6000;
 const FOLD_END_DELAY = 2500;
 const RUNOUT_DELAY = 1400;
+// 올인 콜이 나왔을 때: 카드를 눕히기 전 한 박자, 눕히고 보드가 열리기까지 한 박자.
+// 실제 테이블에서 제일 긴장되는 순간이라, 즉시 넘겨 버리면 재미가 없다.
+const ALLIN_PAUSE = 1200;
+const ALLIN_REVEAL_DELAY = 1600;
 // 연결이 끊긴 사람을 자리비움 처리하기까지 기다리는 시간.
 // 새로고침이나 잠깐의 네트워크 끊김으로 곧바로 빠지지 않을 만큼은 줘야 한다.
 const DISCONNECT_GRACE_MS = 30000;
@@ -40,6 +44,7 @@ class Table {
     this.handNo = 0;
     this.log = [];
     this.results = null;
+    this.allInRevealed = false; // 올인으로 액션이 끝나 카드를 미리 공개했는가
     this.deadline = null;
     this.timers = [];
     this.dropTimers = new Map(); // token -> 연결 끊김 퇴장 타이머
@@ -52,6 +57,8 @@ class Table {
       showdown: config.showdownDelay ?? SHOWDOWN_DELAY,
       fold: config.foldDelay ?? FOLD_END_DELAY,
       runout: config.runoutDelay ?? RUNOUT_DELAY,
+      allInPause: config.allInPauseDelay ?? ALLIN_PAUSE,
+      allInReveal: config.allInRevealDelay ?? ALLIN_REVEAL_DELAY,
     };
   }
 
@@ -412,6 +419,7 @@ class Table {
     this.street = 'preflop';
     this.board = [];
     this.results = null;
+    this.allInRevealed = false;
     this.deck = PokerLib.newShuffledDeck();
     this.currentBet = 0;
     this.minRaise = this.config.bigBlind;
@@ -663,6 +671,25 @@ class Table {
     this.minRaise = this.config.bigBlind;
   }
 
+  /** 올인 때문에 액션이 끝났는가 (아직 겨루는 사람이 둘 이상일 때만) */
+  needsAllInReveal() {
+    if (this.allInRevealed) return false;
+    const active = this.playersInHand();
+    return active.length >= 2 && active.filter((p) => !p.allIn).length <= 1;
+  }
+
+  revealAllIn() {
+    this.actorSeat = null;
+    this.touch(); // 콜한 직후의 화면을 한 박자 보여 준다
+
+    this.later(() => {
+      this.allInRevealed = true;
+      this.pushLog('올인 — 카드를 공개하고 남은 보드를 봅니다.');
+      this.touch(); // 여기서 양쪽 카드가 뒤집힌다
+      this.later(() => this.nextStreet(), this.delays.allInReveal);
+    }, this.delays.allInPause);
+  }
+
   dealBoard(n) {
     this.deck.pop(); // 번 카드
     for (let i = 0; i < n; i++) this.board.push(this.deck.pop());
@@ -670,6 +697,14 @@ class Table {
 
   nextStreet() {
     this.collectBets();
+
+    // 올인으로 더 이상 아무도 액션할 수 없으면, 다음 장을 깔거나 정산하기 전에
+    // 한 박자 쉬고 양쪽 카드를 먼저 눕힌다. 실제 테이블에서 올인 콜이 나오면
+    // 카드를 공개한 다음 보드를 보는 것과 같은 순서다.
+    if (this.needsAllInReveal()) {
+      this.revealAllIn();
+      return;
+    }
 
     if (this.street === 'river') {
       this.showdown();
@@ -820,6 +855,7 @@ class Table {
       }
       this.board = [];
       this.results = null;
+      this.allInRevealed = false;
       this.purgeLeaving(); // 팟 정산이 끝난 지금이 자리를 빼기에 안전한 시점이다
       this.touch();
       if (this.autoNext && this.eligiblePlayers().length >= 2) {
@@ -880,7 +916,9 @@ class Table {
 
   publicState(viewerToken) {
     const viewer = this.players.get(viewerToken) || null;
-    const revealAll = this.status === 'showdown' && this.results && this.results.showdown;
+    // 올인으로 액션이 끝나면 쇼다운을 기다리지 않고 먼저 공개한다
+    const revealAll =
+      this.allInRevealed || (this.status === 'showdown' && this.results && this.results.showdown);
 
     const players = this.seatedPlayers().map((p) => {
       const isMe = viewer && p.token === viewerToken;

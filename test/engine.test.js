@@ -46,6 +46,8 @@ function makeTable(overrides = {}) {
     showdownDelay: 0,
     foldDelay: 0,
     runoutDelay: 0,
+    allInPauseDelay: 0,
+    allInRevealDelay: 0,
     ...overrides,
   });
 }
@@ -295,6 +297,58 @@ testAsync('모두 폴드하면 남은 한 명이 팟을 가져간다', async () 
   await tick();
 });
 
+testAsync('올인 콜: 보드를 깔기 전에 양쪽 카드를 먼저 공개한다', async () => {
+  // 뜸을 실제로 들이는지 보려면 딜레이가 0이면 안 된다
+  // 쇼다운이 곧바로 지나가 버리지 않도록 정산 뒤 여유를 준다
+  const t = makeTable({ allInPauseDelay: 40, allInRevealDelay: 40, runoutDelay: 5, showdownDelay: 500 });
+  t.autoNext = false;
+  const a = t.addPlayer('t1', 'A');
+  const b = t.addPlayer('t2', 'B');
+  t.startHand();
+
+  const actor = t.playerAtSeat(t.actorSeat);
+  t.act(actor.token, 'allin');
+  const caller = t.playerAtSeat(t.actorSeat);
+  t.act(caller.token, 'allin');
+
+  // 콜한 직후: 아직 아무것도 공개되지 않고 보드도 그대로다
+  assert.strictEqual(t.allInRevealed, false, '콜 직후에는 아직 뜸을 들인다');
+  assert.strictEqual(t.board.length, 0, '뜸 들이는 동안 보드가 열리면 안 된다');
+  assert.deepStrictEqual(
+    t.publicState('t1').players.find((p) => p.name === 'B').cards,
+    ['??', '??'],
+    '아직 상대 카드는 보이지 않는다'
+  );
+
+  // 뜸이 끝나면 보드보다 카드가 먼저 열린다
+  for (let i = 0; i < 200 && !t.allInRevealed; i++) await tick();
+  assert.strictEqual(t.allInRevealed, true);
+  assert.strictEqual(t.board.length, 0, '카드가 보드보다 먼저 열려야 한다');
+  const seen = t.publicState('t1').players.find((p) => p.name === 'B').cards;
+  assert.strictEqual(seen.length, 2);
+  assert.ok(!seen.includes('??'), '올인 상대의 카드가 공개되어야 한다');
+
+  // 그 뒤 보드가 리버까지 흐르고 정산된다
+  for (let i = 0; i < 400 && t.status !== 'showdown'; i++) await tick();
+  assert.strictEqual(t.status, 'showdown');
+  assert.strictEqual(t.board.length, 5);
+  assert.strictEqual(a.stack + b.stack, 20000, '칩 총량이 보존되어야 한다');
+});
+
+testAsync('폴드로 끝난 핸드에서는 카드를 공개하지 않는다', async () => {
+  const t = makeTable();
+  t.autoNext = false;
+  t.addPlayer('t1', 'A');
+  t.addPlayer('t2', 'B');
+  t.startHand();
+  const actor = t.playerAtSeat(t.actorSeat);
+  t.act(actor.token, 'fold');
+  assert.strictEqual(t.allInRevealed, false);
+  const winner = t.publicState(actor.token).players.find((p) => !p.isMe);
+  assert.deepStrictEqual(winner.cards, ['??', '??'], '무경합 승리에서는 이긴 사람 카드도 덮여 있다');
+  await tick();
+});
+
 testAsync('사이드 팟: 숏스택은 메인 팟까지만 가져간다', async () => {
   const t = makeTable({ startingStack: 10000 });
   t.autoNext = false;
@@ -312,7 +366,9 @@ testAsync('사이드 팟: 숏스택은 메인 팟까지만 가져간다', async 
     t.act(actor.token, 'allin');
     await tick();
   }
-  await tick();
+  // 올인 공개 단계가 끼어 있으므로 핸드가 끝날 때까지 기다린다
+  for (let i = 0; i < 200 && t.status === 'playing'; i++) await tick();
+  assert.notStrictEqual(t.status, 'playing', '올인 공개를 거쳐 정산까지 진행되어야 한다');
   const total = [...t.players.values()].reduce((s, p) => s + p.stack, 0);
   assert.strictEqual(total, 15000, '칩 총량이 보존되어야 한다');
   assert.ok(a.stack <= 3000, '숏스택은 자기 기여분의 3배(메인팟)를 넘게 딸 수 없다');
