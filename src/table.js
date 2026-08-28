@@ -47,6 +47,11 @@ class Table {
     this.allInRevealed = false; // 올인으로 액션이 끝나 카드를 미리 공개했는가
     this.deadline = null;
     this.timers = [];
+    this.actionTimer = null; // 제한시간 타이머 (일시정지 때 이것만 따로 멈춘다)
+    this.paused = false;
+    this.pausedRemainMs = null; // 일시정지 순간에 남아 있던 제한시간
+    this.pendingBlinds = null;  // 핸드 도중 바꾼 블라인드 (다음 핸드부터 적용)
+    this.banned = new Set();    // 방장이 내보낸 토큰 — 같은 링크로 다시 못 들어온다
     this.dropTimers = new Map(); // token -> 연결 끊김 퇴장 타이머
     this.disconnectGrace = config.disconnectGrace ?? DISCONNECT_GRACE_MS;
     this.createdAt = Date.now();
@@ -100,7 +105,12 @@ class Table {
     };
   }
 
+  isBanned(token) {
+    return this.banned.has(token);
+  }
+
   addPlayer(token, name) {
+    if (this.isBanned(token)) throw new Error('방장이 이 테이블에서 내보냈습니다');
     const existing = this.players.get(token);
     if (existing) {
       existing.name = name || existing.name;
@@ -129,6 +139,7 @@ class Table {
       handNo: this.handNo,
       buttonSeat: this.buttonSeat,
       hostToken: this.hostToken,
+      banned: [...this.banned],
       players: this.seatedPlayers().map((p) => ({
         token: p.token,
         name: p.name,
@@ -148,15 +159,18 @@ class Table {
       this.players.set(s.token, p);
       this.markDisconnected(p); // 실제로 다시 붙을 때까지는 끊긴 상태로 둔다
     }
+    if (Array.isArray(snap.banned)) for (const t of snap.banned) this.banned.add(String(t));
     this.handNo = Number(snap.handNo) || 0;
     this.buttonSeat = typeof snap.buttonSeat === 'number' ? snap.buttonSeat : null;
     if (snap.hostToken && this.players.has(snap.hostToken)) this.hostToken = snap.hostToken;
     this.pushLog('이전 테이블 상태를 복원했습니다.');
   }
 
-  removePlayer(token) {
+  /** @param {'leave'|'kick'} reason 로그 문구만 달라진다 */
+  removePlayer(token, reason = 'leave') {
     const p = this.players.get(token);
     if (!p) return;
+    const kicked = reason === 'kick';
     this.cancelDrop(token);
 
     if (p.inHand && this.status === 'playing' && !p.folded) {
@@ -167,7 +181,11 @@ class Table {
       p.hasActed = true;
       p.lastAction = '폴드';
       p.leaving = true;
-      this.pushLog(`${p.name} 님이 나가서 폴드 처리되었습니다.`);
+      this.pushLog(
+        kicked
+          ? `${p.name} 님이 방장에게 내보내져 폴드 처리되었습니다. (핸드가 끝나면 자리에서 빠집니다)`
+          : `${p.name} 님이 나가서 폴드 처리되었습니다.`
+      );
       if (this.hostToken === token) this.reassignHost();
       if (this.actorSeat === p.seat) this.advance();
       else this.checkAloneWinner();
@@ -176,7 +194,7 @@ class Table {
     }
 
     this.players.delete(token);
-    this.pushLog(`${p.name} 님이 나갔습니다.`);
+    this.pushLog(kicked ? `${p.name} 님을 방장이 내보냈습니다.` : `${p.name} 님이 나갔습니다.`);
     if (this.hostToken === token) this.reassignHost();
     this.touch();
   }
@@ -320,6 +338,98 @@ class Table {
     this.touch();
   }
 
+  /* ------------------------------------------------------------ 방장 기능 */
+
+  /**
+   * 블라인드 변경. 핸드 도중에 바꾸면 판이 꼬이므로 다음 핸드부터 적용한다.
+   * @param {number} smallBlind @param {number} bigBlind
+   */
+  setBlinds(smallBlind, bigBlind) {
+    const bb = Math.floor(Number(bigBlind));
+    const sb = Math.floor(Number(smallBlind));
+    if (!Number.isFinite(bb) || !Number.isFinite(sb)) throw new Error('블라인드 금액이 올바르지 않습니다');
+    if (bb < 2 || bb > 1000000) throw new Error('BB 는 2 이상 1,000,000 이하로 정해 주세요');
+    if (sb < 1 || sb > bb) throw new Error('SB 는 1 이상, BB 이하여야 합니다');
+
+    if (sb === this.config.smallBlind && bb === this.config.bigBlind) {
+      if (this.pendingBlinds) {
+        this.pendingBlinds = null;
+        this.pushLog('예약해 둔 블라인드 변경을 취소했습니다.');
+        this.touch();
+      }
+      return;
+    }
+
+    if (this.status === 'playing') {
+      this.pendingBlinds = { smallBlind: sb, bigBlind: bb };
+      this.pushLog(`⬆ 다음 핸드부터 블라인드가 SB ${sb} / BB ${bb} 로 바뀝니다.`);
+    } else {
+      this.applyBlinds({ smallBlind: sb, bigBlind: bb });
+    }
+    this.touch();
+  }
+
+  applyBlinds(blinds) {
+    this.config.smallBlind = blinds.smallBlind;
+    this.config.bigBlind = blinds.bigBlind;
+    if (this.status !== 'playing') this.minRaise = blinds.bigBlind;
+    this.pendingBlinds = null;
+    this.pushLog(`⬆ 블라인드가 SB ${blinds.smallBlind} / BB ${blinds.bigBlind} 로 바뀌었습니다.`);
+  }
+
+  /**
+   * 일시정지. 제한시간을 멈추고 다음 핸드가 시작되지 않게 한다.
+   * 진행 중인 핸드를 도중에 없애지는 않는다 (팟이 붕 뜨기 때문).
+   */
+  setPaused(value) {
+    const next = !!value;
+    if (next === this.paused) return;
+    this.paused = next;
+
+    if (next) {
+      if (this.deadline) {
+        this.pausedRemainMs = Math.max(0, this.deadline - Date.now());
+        this.clearActionTimer();
+        this.deadline = null;
+      }
+      this.pushLog('⏸ 방장이 게임을 일시정지했습니다. (제한시간 정지 · 다음 핸드 대기)');
+      this.touch();
+      return;
+    }
+
+    this.pushLog('▶ 방장이 게임을 다시 시작했습니다.');
+    const remain = this.pausedRemainMs;
+    this.pausedRemainMs = null;
+    if (this.status === 'playing' && this.actorSeat !== null) this.startActionTimer(remain);
+    this.touch();
+    this.maybeAutoStart();
+  }
+
+  /**
+   * 방장이 다른 사람을 내보낸다. 핸드 도중이면 폴드시키고 자리는 핸드가 끝난 뒤에 뺀다.
+   * @returns {string} 내보낸 사람의 토큰 (전송 계층이 그 연결을 끊는 데 쓴다)
+   */
+  kick(hostToken, playerId) {
+    if (this.hostToken !== hostToken) throw new Error('방장만 내보낼 수 있습니다');
+    const target = [...this.players.values()].find((p) => p.id === playerId);
+    if (!target) throw new Error('내보낼 사람을 찾을 수 없습니다');
+    if (target.token === hostToken) throw new Error('방장은 스스로를 내보낼 수 없습니다');
+
+    const token = target.token;
+    this.banned.add(token); // 같은 링크로 슬쩍 다시 들어오지 못하게
+    this.removePlayer(token, 'kick');
+    return token;
+  }
+
+  /** 잘못 내보냈을 때 되돌린다 — 다시 입장할 수 있게 명단을 비운다 */
+  clearBans() {
+    if (!this.banned.size) return;
+    const n = this.banned.size;
+    this.banned.clear();
+    this.pushLog(`내보낸 ${n}명이 다시 입장할 수 있습니다.`);
+    this.touch();
+  }
+
   addChips(token, amount) {
     const p = this.players.get(token);
     if (!p) return;
@@ -382,7 +492,16 @@ class Table {
   clearTimers() {
     for (const t of this.timers) clearTimeout(t);
     this.timers = [];
+    this.actionTimer = null;
     this.deadline = null;
+  }
+
+  /** 제한시간 타이머만 멈춘다 (스트리트 전환·쇼다운 타이머는 그대로 둔다) */
+  clearActionTimer() {
+    if (!this.actionTimer) return;
+    clearTimeout(this.actionTimer);
+    this.timers = this.timers.filter((t) => t !== this.actionTimer);
+    this.actionTimer = null;
   }
 
   later(fn, ms) {
@@ -401,17 +520,20 @@ class Table {
   /* ------------------------------------------------------------ 핸드 진행 */
 
   maybeAutoStart() {
-    if (this.status !== 'waiting') return;
+    if (this.status !== 'waiting' || this.paused) return;
     if (this.eligiblePlayers().length >= 2 && this.handNo > 0 && this.autoNext) this.startHand();
   }
 
   startHand() {
+    if (this.paused) throw new Error('일시정지 상태입니다. 먼저 재개해 주세요');
     const eligible = this.eligiblePlayers();
     if (eligible.length < 2) {
       this.status = 'waiting';
       this.touch();
       throw new Error('게임을 시작하려면 칩을 가진 플레이어가 2명 이상 필요합니다');
     }
+    // 핸드 도중에 예약해 둔 블라인드는 여기서 적용된다
+    if (this.pendingBlinds) this.applyBlinds(this.pendingBlinds);
 
     this.clearTimers();
     this.handNo++;
@@ -485,20 +607,25 @@ class Table {
     if (player.stack === 0) player.allIn = true;
   }
 
-  startActionTimer() {
+  /** @param {number} [remainMs] 일시정지에서 돌아올 때 남은 시간부터 이어 센다 */
+  startActionTimer(remainMs) {
+    this.clearActionTimer();
     this.deadline = null;
     if (!this.config.actionTime || this.actorSeat === null) return;
-    this.deadline = Date.now() + this.config.actionTime * 1000;
+    if (this.paused) return; // 일시정지 중에는 시계를 걸지 않는다
+
+    const ms = Math.max(0, Number.isFinite(remainMs) ? remainMs : this.config.actionTime * 1000);
+    this.deadline = Date.now() + ms;
     const seat = this.actorSeat;
     const hand = this.handNo;
-    this.later(() => {
+    this.actionTimer = this.later(() => {
       if (this.status !== 'playing' || this.actorSeat !== seat || this.handNo !== hand) return;
       const p = this.playerAtSeat(seat);
       if (!p) return;
       const canCheck = p.bet === this.currentBet;
       this.pushLog(`${p.name} 님 시간 초과 — 자동 ${canCheck ? '체크' : '폴드'}`);
       this.applyAction(p, canCheck ? 'check' : 'fold');
-    }, this.config.actionTime * 1000 + 500);
+    }, ms + 500);
   }
 
   /** 외부 진입점: 토큰으로 액션 실행 */
@@ -858,7 +985,7 @@ class Table {
       this.allInRevealed = false;
       this.purgeLeaving(); // 팟 정산이 끝난 지금이 자리를 빼기에 안전한 시점이다
       this.touch();
-      if (this.autoNext && this.eligiblePlayers().length >= 2) {
+      if (this.autoNext && !this.paused && this.eligiblePlayers().length >= 2) {
         try {
           this.startHand();
         } catch (_) {
@@ -959,6 +1086,9 @@ class Table {
         disconnectGrace: this.disconnectGrace,
       },
       status: this.status,
+      paused: this.paused,
+      pendingBlinds: this.pendingBlinds,
+      bannedCount: this.banned.size,
       street: this.street,
       handNo: this.handNo,
       board: this.board.map(PokerLib.cardCode),

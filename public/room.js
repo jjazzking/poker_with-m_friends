@@ -128,7 +128,15 @@ async function boot() {
   });
 }
 
+/** 치명적 오류 화면으로 갈아탄 뒤에는 테이블 화면의 코드가 돌면 안 된다 */
+let torndown = false;
+let roomObserver = null; // 액션 바 높이 변화를 지켜보는 관찰자 (아래에서 붙인다)
+
 function fatal(title, detail) {
+  torndown = true;
+  stopTimer();
+  stopTitleFlash();
+  if (roomObserver) roomObserver.disconnect();
   document.body.innerHTML =
     `<div class="fatal"><h1>${escapeHtml(title)}</h1><p>${escapeHtml(detail)}</p>` +
     `<a class="primary big" href="${new URL('index.html' + location.search, location.href).href}">새 방 만들기</a></div>`;
@@ -149,6 +157,7 @@ function connect(name) {
     token: getToken(),
     handlers: {
       onState(msg) {
+        if (torndown) return;
         $('#connecting').hidden = true;
         const prevActor = state ? state.actorSeat : undefined;
         state = msg;
@@ -160,9 +169,9 @@ function connect(name) {
         if (!state) connectingText(message);
         else toast(message, true);
       },
-      onFatal(message) {
+      onFatal(message, title) {
         toast(message, true);
-        setTimeout(() => fatal('연결이 끊겼습니다', message), 1200);
+        setTimeout(() => fatal(title || '연결이 끊겼습니다', message), 1200);
       },
       onDisconnect() {
         if (!state) connectingText('연결이 끊겼습니다. 다시 연결 중…');
@@ -244,10 +253,20 @@ function render() {
   usedCards = new Set(state.you && state.you.made ? state.you.made.cards : []);
 
   $('#room-name').textContent = state.room.name;
-  $('#blind-badge').textContent = `SB ${fmt(state.room.smallBlind)} / BB ${fmt(state.room.bigBlind)}`;
+  const pending = state.pendingBlinds;
+  $('#blind-badge').textContent =
+    `SB ${fmt(state.room.smallBlind)} / BB ${fmt(state.room.bigBlind)}` +
+    (pending ? ` → ${fmt(pending.smallBlind)}/${fmt(pending.bigBlind)}` : '');
+  $('#blind-badge').title = pending ? '다음 핸드부터 바뀝니다' : '';
   $('#hand-badge').textContent = `#${state.handNo}`;
   // P2P 모드에서는 방장 탭이 곧 서버라서, 닫으면 방이 사라진다는 것을 알려 준다
   $('#host-badge').hidden = !(Net.mode === 'p2p' && Net.isHost);
+  $('#pause-badge').hidden = !state.paused;
+
+  const iAmHost = !!(state.you && state.you.isHost);
+  $('#host-btn').hidden = !iAmHost;
+  if (!iAmHost) $('#host-modal').hidden = true; // 방장을 넘겼으면 설정 창도 닫는다
+  else if (!$('#host-modal').hidden) renderHostModal();
 
   const potEl = $('#pot');
   potEl.textContent = fmt(state.pot);
@@ -288,14 +307,21 @@ function render() {
   syncTurnSignals();
 }
 
+/** '내 패'와 남은 시간 중 하나라도 있을 때만 그 줄을 띄운다 */
+function syncAbStrip() {
+  $('#ab-strip').hidden = $('#made-hand').hidden && $('#turn-head').hidden;
+}
+
 function renderMadeHand() {
   const el = $('#made-hand');
   const made = state.you && state.you.made;
   if (!made || state.status === 'waiting') {
     el.hidden = true;
+    syncAbStrip();
     return;
   }
   el.hidden = false;
+  syncAbStrip();
   $('#mh-name').textContent = made.name;
   // 보드/홀카드와 같은 카드 모양으로 크게 보여 준다.
   // 여기 있는 카드는 전부 '내 패를 이루는 카드'라, 초록 테두리는 오히려 산만해서 뺀다.
@@ -584,9 +610,17 @@ function renderActions() {
   if (!legal) {
     panel.hidden = true;
     waiting.hidden = false;
-    const canStart = state.you && state.you.isHost && state.status === 'waiting';
+    const canStart = state.you && state.you.isHost && state.status === 'waiting' && !state.paused;
     const seated = state.players.filter((p) => !p.sittingOut && p.stack > 0).length;
     $('#start-btn').hidden = !(canStart && seated >= 2);
+
+    if (state.paused && state.status !== 'playing') {
+      $('#waiting-text').textContent = state.you && state.you.isHost
+        ? '⏸ 일시정지됨 — 방장 설정에서 다시 시작할 수 있습니다.'
+        : '⏸ 방장이 게임을 일시정지했습니다.';
+      return;
+    }
+
     // 올인으로 액션이 끝나면 아무도 기다릴 사람이 없다 (공개 → 보드 러너)
     const runout = state.status === 'playing' && state.actorSeat === null;
     $('#waiting-text').textContent =
@@ -696,6 +730,7 @@ function syncTurnSignals() {
   const myTurn = !!(state && state.legal);
   document.body.classList.toggle('my-turn', myTurn);
   $('#turn-head').hidden = !myTurn;
+  syncAbStrip();
   if (!myTurn) {
     document.body.classList.remove('turn-hurry');
     stopTitleFlash();
@@ -715,7 +750,8 @@ function startTimer() {
   const bar = $('#timer');
   if (!state || state.status !== 'playing' || !state.deadline || !state.room.actionTime) {
     bar.style.width = '0%';
-    $('#turn-count').textContent = '';
+    // 일시정지 중에는 시계가 멈춰 있다는 것을 차례인 사람에게 알려 준다
+    $('#turn-count').textContent = state && state.paused && state.legal ? '⏸ 일시정지' : '';
     document.body.classList.remove('turn-hurry');
     return;
   }
@@ -915,6 +951,100 @@ $('#copy-link').addEventListener('click', async () => {
   }
 });
 
+/* ------------------------------------------------------- 방장 설정 창 */
+
+function openHostModal() {
+  if (!state || !state.you || !state.you.isHost) return;
+  $('#host-modal').hidden = false;
+  // 열 때마다 지금 블라인드를 채워 둔다 (가장 흔한 조작이 '두 배')
+  $('#blind-sb').value = state.pendingBlinds ? state.pendingBlinds.smallBlind : state.room.smallBlind;
+  $('#blind-bb').value = state.pendingBlinds ? state.pendingBlinds.bigBlind : state.room.bigBlind;
+  renderHostModal();
+}
+
+function renderHostModal() {
+  if (!state) return;
+
+  $('#pause-btn').textContent = state.paused ? '▶ 다시 시작' : '⏸ 일시정지';
+  $('#pause-btn').classList.toggle('resume', state.paused);
+
+  $('#blind-note').textContent =
+    `현재 SB ${fmt(state.room.smallBlind)} / BB ${fmt(state.room.bigBlind)}` +
+    (state.pendingBlinds
+      ? ` · 다음 핸드부터 SB ${fmt(state.pendingBlinds.smallBlind)} / BB ${fmt(state.pendingBlinds.bigBlind)}`
+      : state.status === 'playing'
+      ? ' · 핸드 진행 중이라 다음 핸드부터 적용됩니다'
+      : '');
+
+  const wrap = $('#host-players');
+  wrap.innerHTML = '';
+  for (const p of state.players) {
+    const row = document.createElement('div');
+    row.className = 'host-player' + (p.isMe ? ' me' : '');
+
+    const info = document.createElement('span');
+    info.className = 'hp-info';
+    const tags = [
+      p.isHost ? '방장' : '',
+      p.leaving ? '나가는 중' : '',
+      !p.connected ? '연결끊김' : '',
+      p.sittingOut ? '자리비움' : '',
+    ].filter(Boolean);
+    info.innerHTML =
+      `<b>${escapeHtml(p.name)}</b> <span class="hp-stack">${fmt(p.stack)}</span>` +
+      (tags.length ? ` <span class="hp-tag">${tags.join(' · ')}</span>` : '');
+    row.appendChild(info);
+
+    if (!p.isMe && !p.leaving) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'ghost sm danger';
+      btn.textContent = '내보내기';
+      btn.addEventListener('click', () => {
+        if (!confirm(`${p.name} 님을 테이블에서 내보낼까요?\n(같은 링크로는 다시 들어올 수 없습니다)`)) return;
+        sendMsg({ type: 'kick', playerId: p.id });
+      });
+      row.appendChild(btn);
+    }
+    wrap.appendChild(row);
+  }
+
+  const banned = state.bannedCount || 0;
+  const unban = $('#unban-btn');
+  unban.hidden = banned === 0;
+  unban.textContent = `내보낸 ${banned}명 다시 입장 허용`;
+}
+
+$('#host-btn').addEventListener('click', openHostModal);
+$('#host-close').addEventListener('click', () => ($('#host-modal').hidden = true));
+$('#host-modal').addEventListener('click', (e) => {
+  if (e.target === $('#host-modal')) $('#host-modal').hidden = true; // 바깥을 누르면 닫기
+});
+
+$('#pause-btn').addEventListener('click', () => sendMsg({ type: 'pause', value: !state.paused }));
+$('#unban-btn').addEventListener('click', () => sendMsg({ type: 'unban' }));
+
+$('#blind-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const sb = Math.floor(Number($('#blind-sb').value));
+  const bb = Math.floor(Number($('#blind-bb').value));
+  if (!Number.isFinite(sb) || !Number.isFinite(bb) || sb < 1 || bb < 2 || sb > bb) {
+    return toast('SB 는 1 이상, BB 는 2 이상이고 SB 보다 커야 합니다', true);
+  }
+  sendMsg({ type: 'setBlinds', smallBlind: sb, bigBlind: bb });
+  toast(state.status === 'playing' ? '다음 핸드부터 적용됩니다' : '블라인드를 바꿨습니다');
+});
+
+// 프리셋은 입력칸만 채운다 — 실제 적용은 '적용' 을 눌러야 한다
+document.querySelectorAll('#blind-presets button').forEach((b) =>
+  b.addEventListener('click', () => {
+    const mul = Number(b.dataset.mul);
+    const bb = Math.max(2, Math.round(state.room.bigBlind * mul));
+    $('#blind-bb').value = bb;
+    $('#blind-sb').value = Math.max(1, Math.round(bb / 2));
+  })
+);
+
 $('#chat-form').addEventListener('submit', (e) => {
   e.preventDefault();
   const input = $('#chat-input');
@@ -930,7 +1060,10 @@ $('#win-overlay').addEventListener('click', hideWinOverlay);
 // 키보드 단축키: F 폴드 / C 콜·체크 / R 레이즈
 document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-  if (e.key === 'Escape') return hideWinOverlay();
+  if (e.key === 'Escape') {
+    $('#host-modal').hidden = true;
+    return hideWinOverlay();
+  }
   if (!state?.legal) return;
   const k = e.key.toLowerCase();
   if (k === 'f') $('#btn-fold').click();
@@ -963,9 +1096,13 @@ const sideEl = $('#side');
 const sideResizer = $('#side-resizer');
 const sideToggle = $('#side-toggle');
 
-/** 좁은 화면(세로 분할)인지 — style.css 의 미디어 쿼리와 같은 기준 */
-const isNarrowSide = () => window.matchMedia('(max-width: 900px)').matches;
-const roomBox = () => $('.room').getBoundingClientRect();
+/** 채팅창이 테이블 아래로 깔리는 배치인지 — style.css 의 미디어 쿼리와 같은 기준 */
+const SIDE_STACKED_MQ = '(max-width: 900px) and (orientation: portrait)';
+const isNarrowSide = () => window.matchMedia(SIDE_STACKED_MQ).matches;
+const roomBox = () => {
+  const el = $('.room');
+  return el ? el.getBoundingClientRect() : { width: window.innerWidth, height: window.innerHeight };
+};
 
 let sideW = Number(localStorage.getItem(SIDE_W_KEY)) || SIDE_DEFAULT_W;
 let sideH = Number(localStorage.getItem(SIDE_H_KEY)) || 0; // 0 = 아직 정한 적 없음
@@ -986,6 +1123,7 @@ function currentSideH() {
 }
 
 function applySideSize() {
+  if (torndown) return;
   const root = document.documentElement.style;
   root.setProperty('--side-w', clampSideW(sideW) + 'px');
   root.setProperty('--side-h', currentSideH() + 'px');
@@ -1089,6 +1227,13 @@ sideToggle.addEventListener('click', () => setSideCollapsed(!sideEl.classList.co
 $('#chat-input').addEventListener('focus', () => {
   if (sideEl.classList.contains('collapsed')) setSideCollapsed(false);
 });
+
+// 액션 바가 커졌다 작아졌다 하면 남는 공간도 바뀐다.
+// 저장해 둔 크기는 그대로 두고, 표시 크기만 다시 맞춰 테이블이 눌리지 않게 한다.
+if (window.ResizeObserver) {
+  roomObserver = new ResizeObserver(() => applySideSize());
+  roomObserver.observe($('.room'));
+}
 
 setSideCollapsed(localStorage.getItem(SIDE_COLLAPSED_KEY) === '1');
 applySideSize();
