@@ -139,6 +139,23 @@ function send(ws, payload) {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(payload));
 }
 
+/** 강퇴된 사람의 연결을 이유와 함께 끊는다 */
+function dropPlayerSockets(roomId, token, title, message) {
+  const set = sockets.get(roomId);
+  if (!set) return;
+  for (const client of [...set]) {
+    if (client.playerToken !== token) continue;
+    send(client, { type: 'fatal', title, message });
+    set.delete(client);
+    client.playerToken = null; // close 핸들러가 '연결 끊김'으로 처리하지 않도록
+    try {
+      client.close(4001, 'kicked');
+    } catch (_) {
+      /* 이미 닫힘 */
+    }
+  }
+}
+
 /* ------------------------------------------------------- 방 생성 남용 방지 */
 
 const RATE_WINDOW_MS = 10 * 60 * 1000;
@@ -269,6 +286,15 @@ function handleMessage(ws, msg) {
     const token = String(msg.token || '').slice(0, 64) || crypto.randomUUID();
     const name = String(msg.name || '').trim().slice(0, 14) || '플레이어';
 
+    if (table.isBanned(token)) {
+      send(ws, {
+        type: 'fatal',
+        title: '입장할 수 없습니다',
+        message: '방장이 이 테이블에서 내보냈습니다.',
+      });
+      return;
+    }
+
     const player = table.addPlayer(token, name);
     ws.roomId = roomId;
     ws.playerToken = token;
@@ -292,6 +318,15 @@ function handleMessage(ws, msg) {
   });
 
   markDirty();
+
+  if (result.kicked) {
+    dropPlayerSockets(
+      ws.roomId,
+      result.kicked,
+      '테이블에서 나가게 되었습니다',
+      '방장이 당신을 테이블에서 내보냈습니다.'
+    );
+  }
 
   if (result.left) {
     const set = sockets.get(ws.roomId);

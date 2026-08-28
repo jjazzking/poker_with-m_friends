@@ -246,6 +246,52 @@ function listen(server) {
     srv.sockets.delete(rid);
   });
 
+  await test('방장이 내보내면 연결이 끊기고 다시 들어올 수 없다', async () => {
+    const create = await fetch(`${base}/api/rooms`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: '강퇴테스트' }),
+    });
+    const { roomId: rid } = await create.json();
+
+    const inbox = { host: [], guest: [] };
+    const connect = (who, token, name) =>
+      new Promise((resolve, reject) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { origin: 'https://allowed.example' });
+        ws.on('error', reject);
+        ws.on('message', (raw) => inbox[who].push(JSON.parse(raw.toString())));
+        ws.on('open', () => {
+          ws.send(JSON.stringify({ type: 'join', roomId: rid, token, name }));
+          resolve(ws);
+        });
+      });
+
+    const host = await connect('host', 'kick-host', '방장');
+    const guest = await connect('guest', 'kick-guest', '손님');
+    const table = srv.rooms.get(rid);
+    await waitFor(() => table.players.size === 2, '둘 다 입장해야 한다');
+
+    const guestId = table.players.get('kick-guest').id;
+    host.send(JSON.stringify({ type: 'kick', playerId: guestId }));
+
+    await waitFor(() => inbox.guest.some((m) => m.type === 'fatal'), '내보낸 사람에게 이유가 전달된다');
+    assert.match(inbox.guest.find((m) => m.type === 'fatal').message, /내보냈습니다/);
+    await waitFor(() => guest.readyState === WebSocket.CLOSED, '연결이 끊겨야 한다');
+    assert.ok(!table.players.has('kick-guest'), '자리에서 빠져야 한다');
+
+    // 같은 토큰으로 다시 붙어도 입장이 막힌다
+    inbox.guest.length = 0;
+    const again = await connect('guest', 'kick-guest', '손님');
+    await waitFor(() => inbox.guest.some((m) => m.type === 'fatal'), '재입장은 막힌다');
+    assert.strictEqual(table.players.size, 1, '다시 앉지 못한다');
+
+    again.close();
+    host.close();
+    table.dispose();
+    srv.rooms.delete(rid);
+    srv.sockets.delete(rid);
+  });
+
   await test('저장한 방을 재시작 후 복원한다', async () => {
     // 앞선 테스트에 기대지 않도록 이 테스트만의 방을 새로 만든다
     const create = await fetch(`${base}/api/rooms`, {

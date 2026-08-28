@@ -753,6 +753,77 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .toast.error { border-color: var(--red); }
 
 .host-badge { border-color: var(--accent); color: var(--accent); }
+.pause-badge { border-color: var(--gold); color: var(--gold); font-weight: 700; }
+
+/* ------------------------------------------------------- 방장 설정 창 */
+
+.host-card { max-width: 420px; max-height: 86vh; overflow-y: auto; }
+.host-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.host-head h2 { margin: 0; }
+
+.host-sec { border-top: 1px solid var(--line); padding-top: 14px; margin-top: 14px; }
+.host-sec h3 { margin: 0 0 6px; font-size: 14px; }
+.host-sec p.muted { font-size: 12px; color: var(--muted); margin: 0 0 10px; line-height: 1.5; }
+.host-sec .primary.big { width: 100%; }
+.host-sec .primary.resume { background: var(--gold); color: #2a1e00; }
+
+.blind-form { display: flex; align-items: flex-end; gap: 8px; }
+.blind-form label {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.blind-form input {
+  width: 100%;
+  padding: 9px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  outline: none;
+  font-weight: 700;
+}
+.blind-form button { flex: none; padding: 10px 16px; }
+
+.blind-presets { display: flex; gap: 6px; margin-top: 8px; }
+.blind-presets button {
+  flex: 1;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 7px 0;
+  font-size: 12px;
+}
+.blind-presets button:hover { border-color: var(--accent); color: var(--text); }
+
+.host-players { display: flex; flex-direction: column; gap: 6px; }
+.host-player {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+  font-size: 13px;
+}
+.host-player.me { border-color: var(--accent); }
+.hp-info { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hp-stack { color: var(--gold); font-weight: 700; margin-left: 4px; }
+.hp-tag { color: var(--muted); font-size: 11px; margin-left: 4px; }
+#unban-btn { margin-top: 10px; width: 100%; }
 
 .connecting {
   position: fixed;

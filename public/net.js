@@ -157,7 +157,7 @@
           else if (msg.type === 'error') handlers.onError(msg.message);
           else if (msg.type === 'fatal') {
             closed = true; // 방이 없는 등 재시도가 무의미한 상황
-            handlers.onFatal(msg.message);
+            handlers.onFatal(msg.message, msg.title);
           }
         });
 
@@ -339,6 +339,26 @@
       peer.on('connection', onConnection);
     };
 
+    /** 강퇴된 참가자의 연결을 이유와 함께 끊는다 */
+    function dropGuest(kickedToken) {
+      const conn = conns.get(kickedToken);
+      if (!conn) return;
+      conns.delete(kickedToken);
+      conn.playerToken = null;
+      try {
+        if (conn.open) {
+          conn.send({
+            type: 'fatal',
+            title: '테이블에서 나가게 되었습니다',
+            message: '방장이 당신을 테이블에서 내보냈습니다.',
+          });
+        }
+        setTimeout(() => conn.close(), 200);
+      } catch (_) {
+        /* 이미 끊긴 연결 */
+      }
+    }
+
     function onConnection(conn) {
       conn.on('data', (msg) => {
         try {
@@ -348,6 +368,15 @@
             const tk = String(msg.token || '').slice(0, 64);
             const nm = String(msg.name || '').trim().slice(0, 14) || '플레이어';
             if (!tk) return;
+            if (table.isBanned(tk)) {
+              conn.send({
+                type: 'fatal',
+                title: '입장할 수 없습니다',
+                message: '방장이 이 테이블에서 내보냈습니다.',
+              });
+              setTimeout(() => conn.close(), 200);
+              return;
+            }
             const player = table.addPlayer(tk, nm);
             table.setConnected(tk, true);
             const prev = conns.get(tk);
@@ -366,6 +395,7 @@
             msg,
             reply: (payload) => conn.open && conn.send(payload),
           });
+          if (result.kicked) dropGuest(result.kicked);
           if (result.left) {
             conns.delete(conn.playerToken);
             conn.playerToken = null;
@@ -392,6 +422,7 @@
     Net.send = (msg) => {
       try {
         const result = Protocol.handleClientMessage({ table, token, msg, reply: () => {} });
+        if (result.kicked) dropGuest(result.kicked);
         if (result.left) {
           sessionStorage.removeItem(HOST_CFG_KEY(roomId));
           sessionStorage.removeItem(HOST_SNAP_KEY(roomId));
@@ -427,7 +458,7 @@
           if (!msg || typeof msg !== 'object') return;
           if (msg.type === 'state') handlers.onState(msg);
           else if (msg.type === 'error') handlers.onError(msg.message);
-          else if (msg.type === 'fatal') handlers.onFatal(msg.message);
+          else if (msg.type === 'fatal') handlers.onFatal(msg.message, msg.title);
         });
         conn.on('close', () => {
           handlers.onDisconnect();

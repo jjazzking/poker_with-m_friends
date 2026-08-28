@@ -35,6 +35,26 @@ function handleClientMessage({ table, token, msg, reply }) {
       table.touch();
       return {};
 
+    case 'setBlinds':
+      if (!isHost) throw new Error('방장만 블라인드를 바꿀 수 있습니다');
+      table.setBlinds(msg.smallBlind, msg.bigBlind);
+      return {};
+
+    case 'pause':
+      if (!isHost) throw new Error('방장만 일시정지할 수 있습니다');
+      table.setPaused(msg.value);
+      return {};
+
+    case 'kick':
+      if (!isHost) throw new Error('방장만 내보낼 수 있습니다');
+      // 전송 계층이 그 사람의 연결을 끊도록 토큰을 돌려준다
+      return { kicked: table.kick(token, msg.playerId) };
+
+    case 'unban':
+      if (!isHost) throw new Error('방장만 바꿀 수 있습니다');
+      table.clearBans();
+      return {};
+
     case 'chat': {
       const text = String(msg.text || '').trim().slice(0, 120);
       if (text) {

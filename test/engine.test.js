@@ -623,6 +623,142 @@ testAsync('방장이 끊기면 자리는 지키되 방장은 넘어간다', asyn
   t.dispose();
 });
 
+/* ------------------------------------------------------- 방장 기능 */
+
+console.log('\n방장 기능');
+
+test('블라인드 변경은 대기 중이면 즉시, 핸드 중이면 다음 핸드부터', () => {
+  const t = makeTable();
+  t.addPlayer('a', '앨리스');
+  t.addPlayer('b', '밥');
+
+  t.setBlinds(100, 200);
+  assert.strictEqual(t.config.smallBlind, 100);
+  assert.strictEqual(t.config.bigBlind, 200);
+  assert.strictEqual(t.pendingBlinds, null);
+
+  t.startHand();
+  t.setBlinds(200, 400);
+  assert.strictEqual(t.config.bigBlind, 200, '진행 중인 핸드의 블라인드는 그대로여야 한다');
+  assert.deepStrictEqual(t.pendingBlinds, { smallBlind: 200, bigBlind: 400 });
+
+  // 다음 핸드가 시작될 때 적용된다
+  t.status = 'waiting';
+  t.startHand();
+  assert.strictEqual(t.config.bigBlind, 400, '다음 핸드부터는 새 블라인드다');
+  assert.strictEqual(t.pendingBlinds, null);
+  t.dispose();
+});
+
+test('말이 안 되는 블라인드는 거절한다', () => {
+  const t = makeTable();
+  t.addPlayer('a', '앨리스');
+  assert.throws(() => t.setBlinds(300, 200), /SB/, 'SB 가 BB 보다 클 수 없다');
+  assert.throws(() => t.setBlinds(1, 1), /BB/, 'BB 는 2 이상이어야 한다');
+  assert.throws(() => t.setBlinds(1, 'x'), /올바르지/);
+  assert.strictEqual(t.config.bigBlind, 100, '거절된 값은 반영되지 않는다');
+  t.dispose();
+});
+
+test('일시정지하면 제한시간이 멈추고 다음 핸드도 시작되지 않는다', () => {
+  const t = makeTable({ actionTime: 60 });
+  t.addPlayer('a', '앨리스');
+  t.addPlayer('b', '밥');
+  t.startHand();
+  assert.ok(t.deadline, '핸드 중에는 제한시간이 돈다');
+
+  t.setPaused(true);
+  assert.strictEqual(t.deadline, null, '일시정지 중에는 시계가 멈춘다');
+  assert.ok(t.pausedRemainMs > 0, '남은 시간을 기억해 둔다');
+  assert.throws(() => t.startHand(), /일시정지/);
+
+  t.setPaused(false);
+  assert.ok(t.deadline > Date.now(), '재개하면 남은 시간부터 다시 센다');
+  assert.ok(t.deadline - Date.now() <= 60000);
+  t.dispose();
+});
+
+testAsync('일시정지 중에는 자동으로 다음 핸드가 시작되지 않는다', async () => {
+  const t = makeTable({ actionTime: 0 });
+  t.addPlayer('a', '앨리스');
+  t.addPlayer('b', '밥');
+  t.startHand();
+  t.setPaused(true);
+
+  // 한 명이 폴드해서 핸드를 끝낸다
+  const actor = t.playerAtSeat(t.actorSeat);
+  t.act(actor.token, 'fold');
+  let guard = 0;
+  while (t.status !== 'waiting') {
+    await tick();
+    if (++guard > 400) throw new Error('핸드가 끝나지 않는다');
+  }
+  await tick();
+  assert.strictEqual(t.status, 'waiting', '일시정지 중이면 다음 핸드로 넘어가지 않는다');
+  assert.strictEqual(t.handNo, 1);
+
+  t.setPaused(false);
+  assert.strictEqual(t.handNo, 2, '재개하면 다음 핸드가 시작된다');
+  t.dispose();
+});
+
+test('강퇴된 사람은 자리에서 빠지고 같은 토큰으로 다시 못 들어온다', () => {
+  const t = makeTable();
+  t.addPlayer('a', '앨리스');
+  const bob = t.addPlayer('b', '밥');
+
+  assert.throws(() => t.kick('b', bob.id), /방장만/, '방장이 아니면 못 내보낸다');
+  assert.throws(() => t.kick('a', 'P999'), /찾을 수 없습니다/);
+  assert.throws(() => t.kick('a', t.players.get('a').id), /스스로/);
+
+  assert.strictEqual(t.kick('a', bob.id), 'b');
+  assert.ok(!t.players.has('b'), '자리에서 빠진다');
+  assert.throws(() => t.addPlayer('b', '밥'), /내보냈습니다/, '같은 토큰으로는 다시 못 들어온다');
+
+  t.clearBans();
+  assert.ok(t.addPlayer('b', '밥'), '다시 입장을 허용하면 들어올 수 있다');
+  t.dispose();
+});
+
+testAsync('핸드 도중 강퇴하면 폴드 처리하고 핸드가 끝난 뒤 자리를 뺀다', async () => {
+  const t = makeTable({ actionTime: 0 });
+  t.addPlayer('a', '앨리스');
+  t.addPlayer('b', '밥');
+  t.addPlayer('c', '찰리');
+  t.autoNext = false; // 정산 결과를 확인할 수 있게 다음 핸드는 자동으로 시작하지 않는다
+  t.startHand();
+  const total = [...t.players.values()].reduce((s, p) => s + p.stack, 0) + t.pot();
+
+  const victim = t.players.get('c');
+  t.kick('a', victim.id);
+  assert.ok(t.players.has('c'), '정산 전에는 자리를 지켜 둔다');
+  assert.ok(victim.folded, '진행 중인 핸드에서는 폴드된다');
+
+  let guard = 0;
+  while (t.status === 'playing') {
+    const actor = t.playerAtSeat(t.actorSeat);
+    if (!actor) { await tick(); } else {
+      const legal = t.legalActionsFor(actor);
+      t.act(actor.token, legal.canCheck ? 'check' : 'call');
+    }
+    if (++guard > 40) throw new Error('핸드가 진행되지 않는다');
+  }
+  guard = 0;
+  while (t.status !== 'waiting') {
+    await tick();
+    if (++guard > 400) throw new Error('핸드가 끝나지 않는다');
+  }
+
+  assert.ok(!t.players.has('c'), '핸드가 끝나면 자리에서 빠진다');
+  const after = [...t.players.values()].reduce((s, p) => s + p.stack, 0);
+  assert.strictEqual(
+    after,
+    total - victim.stack,
+    `칩이 사라지거나 늘었다 (${total} → ${after} + ${victim.stack})`
+  );
+  t.dispose();
+});
+
 process.on('exit', () => {
   console.log(`\n${passed}개 테스트 통과${process.exitCode ? ' (실패 있음)' : ''}\n`);
 });

@@ -28,8 +28,10 @@
     <span class="badge" id="blind-badge">SB/BB</span>
     <span class="badge" id="hand-badge">#0</span>
     <span class="badge host-badge" id="host-badge" hidden>방장 · 이 탭을 열어 두세요</span>
+    <span class="badge pause-badge" id="pause-badge" hidden>⏸ 일시정지</span>
   </div>
   <div class="topbar-right">
+    <button class="ghost sm" id="host-btn" hidden>⚙ 방장 설정</button>
     <button class="ghost sm" id="copy-link">🔗 초대 링크 복사</button>
     <button class="ghost sm" id="rebuy-btn">💰 칩 추가</button>
     <button class="ghost sm" id="sitout-btn">자리 비우기</button>
@@ -138,6 +140,43 @@
     </div>
   </div>
 </footer>
+
+<!-- 방장 전용: 일시정지 / 블라인드 / 강퇴 -->
+<div class="modal" id="host-modal" hidden>
+  <div class="modal-card host-card">
+    <div class="host-head">
+      <h2>방장 설정</h2>
+      <button class="ghost sm" type="button" id="host-close">닫기</button>
+    </div>
+
+    <section class="host-sec">
+      <h3>게임 진행</h3>
+      <p class="muted">일시정지하면 제한시간이 멈추고 다음 핸드가 시작되지 않습니다. 진행 중인 핸드는 그대로 둡니다.</p>
+      <button class="primary big" type="button" id="pause-btn">⏸ 일시정지</button>
+    </section>
+
+    <section class="host-sec">
+      <h3>블라인드</h3>
+      <p class="muted" id="blind-note"></p>
+      <form class="blind-form" id="blind-form">
+        <label>SB <input id="blind-sb" type="number" min="1" step="1" inputmode="numeric" required /></label>
+        <label>BB <input id="blind-bb" type="number" min="2" step="1" inputmode="numeric" required /></label>
+        <button class="primary" type="submit">적용</button>
+      </form>
+      <div class="blind-presets" id="blind-presets">
+        <button type="button" data-mul="1.5">×1.5</button>
+        <button type="button" data-mul="2">×2</button>
+        <button type="button" data-mul="3">×3</button>
+      </div>
+    </section>
+
+    <section class="host-sec">
+      <h3>플레이어</h3>
+      <div class="host-players" id="host-players"></div>
+      <button class="ghost sm" type="button" id="unban-btn" hidden></button>
+    </section>
+  </div>
+</div>
 
 <!-- 핸드가 끝나면 크게 띄우는 결과 화면 -->
 <div class="win-overlay" id="win-overlay" hidden>
