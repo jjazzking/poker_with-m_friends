@@ -288,14 +288,21 @@ function render() {
   syncTurnSignals();
 }
 
+/** '내 패'와 남은 시간 중 하나라도 있을 때만 그 줄을 띄운다 */
+function syncAbStrip() {
+  $('#ab-strip').hidden = $('#made-hand').hidden && $('#turn-head').hidden;
+}
+
 function renderMadeHand() {
   const el = $('#made-hand');
   const made = state.you && state.you.made;
   if (!made || state.status === 'waiting') {
     el.hidden = true;
+    syncAbStrip();
     return;
   }
   el.hidden = false;
+  syncAbStrip();
   $('#mh-name').textContent = made.name;
   // 보드/홀카드와 같은 카드 모양으로 크게 보여 준다.
   // 여기 있는 카드는 전부 '내 패를 이루는 카드'라, 초록 테두리는 오히려 산만해서 뺀다.
@@ -696,6 +703,7 @@ function syncTurnSignals() {
   const myTurn = !!(state && state.legal);
   document.body.classList.toggle('my-turn', myTurn);
   $('#turn-head').hidden = !myTurn;
+  syncAbStrip();
   if (!myTurn) {
     document.body.classList.remove('turn-hurry');
     stopTitleFlash();
@@ -963,8 +971,9 @@ const sideEl = $('#side');
 const sideResizer = $('#side-resizer');
 const sideToggle = $('#side-toggle');
 
-/** 좁은 화면(세로 분할)인지 — style.css 의 미디어 쿼리와 같은 기준 */
-const isNarrowSide = () => window.matchMedia('(max-width: 900px)').matches;
+/** 채팅창이 테이블 아래로 깔리는 배치인지 — style.css 의 미디어 쿼리와 같은 기준 */
+const SIDE_STACKED_MQ = '(max-width: 900px) and (orientation: portrait)';
+const isNarrowSide = () => window.matchMedia(SIDE_STACKED_MQ).matches;
 const roomBox = () => $('.room').getBoundingClientRect();
 
 let sideW = Number(localStorage.getItem(SIDE_W_KEY)) || SIDE_DEFAULT_W;
@@ -1089,6 +1098,10 @@ sideToggle.addEventListener('click', () => setSideCollapsed(!sideEl.classList.co
 $('#chat-input').addEventListener('focus', () => {
   if (sideEl.classList.contains('collapsed')) setSideCollapsed(false);
 });
+
+// 액션 바가 커졌다 작아졌다 하면 남는 공간도 바뀐다.
+// 저장해 둔 크기는 그대로 두고, 표시 크기만 다시 맞춰 테이블이 눌리지 않게 한다.
+if (window.ResizeObserver) new ResizeObserver(() => applySideSize()).observe($('.room'));
 
 setSideCollapsed(localStorage.getItem(SIDE_COLLAPSED_KEY) === '1');
 applySideSize();

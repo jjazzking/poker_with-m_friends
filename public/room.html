@@ -78,12 +78,20 @@
 </main>
 
 <footer class="actionbar" id="actionbar">
-  <div class="made-hand" id="made-hand" hidden>
-    <div class="mh-text">
-      <span class="mh-label">내 패</span>
-      <b id="mh-name"></b>
+  <!-- '내 패' 와 남은 시간은 한 줄에 나란히 둔다 (액션 바가 세로로 길어지지 않도록) -->
+  <div class="ab-strip" id="ab-strip" hidden>
+    <div class="made-hand" id="made-hand" hidden>
+      <div class="mh-text">
+        <span class="mh-label">내 패</span>
+        <b id="mh-name"></b>
+      </div>
+      <span class="mh-cards" id="mh-cards"></span>
     </div>
-    <span class="mh-cards" id="mh-cards"></span>
+
+    <div class="turn-head" id="turn-head">
+      <span class="turn-label">내 차례</span>
+      <span class="turn-count" id="turn-count" role="timer" aria-live="off"></span>
+    </div>
   </div>
 
   <div class="waiting-bar" id="waiting-bar">
@@ -94,23 +102,21 @@
   <div class="action-panel" id="action-panel" hidden>
     <div class="timer-wrap"><div class="timer" id="timer"></div></div>
 
-    <div class="turn-head" id="turn-head">
-      <span class="turn-label">내 차례</span>
-      <span class="turn-count" id="turn-count" role="timer" aria-live="off"></span>
-    </div>
-
     <div class="bet-controls">
-      <div class="unit-toggle" role="group" aria-label="베팅 단위">
-        <button type="button" class="active" id="unit-bb" data-unit="bb">BB 단위</button>
-        <button type="button" id="unit-chips" data-unit="chips">금액 단위</button>
-      </div>
+      <!-- 단위 토글과 금액 입력을 한 줄에 (좁은 화면에서 줄 수를 줄인다) -->
+      <div class="bet-top">
+        <div class="unit-toggle" role="group" aria-label="베팅 단위">
+          <button type="button" class="active" id="unit-bb" data-unit="bb">BB 단위</button>
+          <button type="button" id="unit-chips" data-unit="chips">금액 단위</button>
+        </div>
 
-      <div class="bet-input-row">
-        <button type="button" class="step" id="bet-minus">−</button>
-        <input id="bet-input" type="number" step="1" inputmode="decimal" />
-        <span class="unit-label" id="unit-label">BB</span>
-        <button type="button" class="step" id="bet-plus">+</button>
-        <span class="convert" id="bet-convert"></span>
+        <div class="bet-input-row">
+          <button type="button" class="step" id="bet-minus">−</button>
+          <input id="bet-input" type="number" step="1" inputmode="decimal" />
+          <span class="unit-label" id="unit-label">BB</span>
+          <button type="button" class="step" id="bet-plus">+</button>
+          <span class="convert" id="bet-convert"></span>
+        </div>
       </div>
 
       <input type="range" id="bet-slider" min="0" max="100" step="1" />
