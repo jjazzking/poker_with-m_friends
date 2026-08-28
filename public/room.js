@@ -557,11 +557,19 @@ function renderResults() {
     .join('');
 }
 
+let lastLogCount = 0;
+
 function renderLog() {
   const el = $('#log');
   const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 30;
   el.innerHTML = state.log.map((l) => `<div class="log-line">${escapeHtml(l.text)}</div>`).join('');
   if (atBottom) el.scrollTop = el.scrollHeight;
+
+  // 접어 둔 상태에서 새 소식이 오면 버튼에 표시를 남긴다
+  if (state.log.length > lastLogCount && sideEl.classList.contains('collapsed')) {
+    sideEl.classList.add('has-new');
+  }
+  lastLogCount = state.log.length;
 }
 
 /* ------------------------------------------------------------- 액션 */
@@ -933,9 +941,157 @@ document.addEventListener('keydown', (e) => {
 // 화면 크기가 바뀌면 좌석 반지름을 다시 계산한다
 let resizeTimer = null;
 window.addEventListener('resize', () => {
+  applySideSize();
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => state && renderSeats(), 150);
 });
+
+/* ----------------------------------------- 채팅창(사이드 패널) 크기 조절 */
+
+const SIDE_W_KEY = 'poker:sideW';
+const SIDE_H_KEY = 'poker:sideH';
+const SIDE_COLLAPSED_KEY = 'poker:sideCollapsed';
+
+const SIDE_DEFAULT_W = 300;   // 넓은 화면 기본 너비
+const SIDE_MIN_W = 200;
+const SIDE_MIN_H = 150;       // 최소한 로그 두어 줄 + 입력창은 보이도록
+                              // (더 줄이고 싶으면 접기 버튼을 쓴다)
+const TABLE_MIN_W = 300;      // 테이블에 남겨 두는 최소 공간
+const TABLE_MIN_H = 200;
+
+const sideEl = $('#side');
+const sideResizer = $('#side-resizer');
+const sideToggle = $('#side-toggle');
+
+/** 좁은 화면(세로 분할)인지 — style.css 의 미디어 쿼리와 같은 기준 */
+const isNarrowSide = () => window.matchMedia('(max-width: 900px)').matches;
+const roomBox = () => $('.room').getBoundingClientRect();
+
+let sideW = Number(localStorage.getItem(SIDE_W_KEY)) || SIDE_DEFAULT_W;
+let sideH = Number(localStorage.getItem(SIDE_H_KEY)) || 0; // 0 = 아직 정한 적 없음
+
+function clampSideW(w) {
+  const max = Math.max(SIDE_MIN_W, roomBox().width - TABLE_MIN_W);
+  return Math.round(Math.min(Math.max(w, SIDE_MIN_W), max));
+}
+function clampSideH(h) {
+  const max = Math.max(SIDE_MIN_H, roomBox().height - TABLE_MIN_H);
+  return Math.round(Math.min(Math.max(h, SIDE_MIN_H), max));
+}
+function defaultSideH() {
+  return clampSideH(window.innerHeight * 0.38);
+}
+function currentSideH() {
+  return sideH ? clampSideH(sideH) : defaultSideH();
+}
+
+function applySideSize() {
+  const root = document.documentElement.style;
+  root.setProperty('--side-w', clampSideW(sideW) + 'px');
+  root.setProperty('--side-h', currentSideH() + 'px');
+  sideResizer.setAttribute('aria-orientation', isNarrowSide() ? 'horizontal' : 'vertical');
+}
+
+function setSideCollapsed(collapsed) {
+  sideEl.classList.toggle('collapsed', collapsed);
+  if (!collapsed) sideEl.classList.remove('has-new');
+  sideToggle.setAttribute('aria-expanded', String(!collapsed));
+  sideToggle.title = collapsed ? '채팅창 펼치기' : '채팅창 접기';
+  localStorage.setItem(SIDE_COLLAPSED_KEY, collapsed ? '1' : '0');
+  if (!collapsed) scrollLogToBottom();
+}
+
+function scrollLogToBottom() {
+  const log = $('#log');
+  log.scrollTop = log.scrollHeight;
+}
+
+let sideDrag = null;
+
+sideResizer.addEventListener('pointerdown', (e) => {
+  if (e.button > 0) return;
+  // 접혀 있는 상태에서 끌면 자연스럽게 펼치면서 크기를 잡는다
+  if (sideEl.classList.contains('collapsed')) setSideCollapsed(false);
+
+  const box = sideEl.getBoundingClientRect();
+  sideDrag = {
+    id: e.pointerId,
+    narrow: isNarrowSide(),
+    x: e.clientX,
+    y: e.clientY,
+    w: box.width,
+    h: box.height,
+  };
+  sideResizer.setPointerCapture(e.pointerId);
+  sideResizer.classList.add('dragging');
+  document.body.classList.add('resizing-side', sideDrag.narrow ? 'row' : 'col');
+  e.preventDefault();
+});
+
+sideResizer.addEventListener('pointermove', (e) => {
+  if (!sideDrag || e.pointerId !== sideDrag.id) return;
+  if (sideDrag.narrow) sideH = clampSideH(sideDrag.h - (e.clientY - sideDrag.y));
+  else sideW = clampSideW(sideDrag.w - (e.clientX - sideDrag.x));
+  applySideSize();
+});
+
+function endSideDrag(e) {
+  if (!sideDrag || (e && e.pointerId !== sideDrag.id)) return;
+  saveSideSize(sideDrag.narrow);
+  sideResizer.classList.remove('dragging');
+  document.body.classList.remove('resizing-side', 'row', 'col');
+  sideDrag = null;
+  scrollLogToBottom();
+  if (state) renderSeats();
+}
+sideResizer.addEventListener('pointerup', endSideDrag);
+sideResizer.addEventListener('pointercancel', endSideDrag);
+
+function saveSideSize(narrow) {
+  if (narrow) localStorage.setItem(SIDE_H_KEY, String(currentSideH()));
+  else localStorage.setItem(SIDE_W_KEY, String(clampSideW(sideW)));
+}
+
+// 더블클릭(더블탭)하면 기본 크기로 되돌린다
+sideResizer.addEventListener('dblclick', () => {
+  const narrow = isNarrowSide();
+  if (narrow) sideH = defaultSideH();
+  else sideW = SIDE_DEFAULT_W;
+  applySideSize();
+  saveSideSize(narrow);
+  scrollLogToBottom();
+});
+
+// 키보드로도 조절할 수 있게 (손잡이에 포커스 후 방향키, Shift 로 큰 폭)
+sideResizer.addEventListener('keydown', (e) => {
+  const narrow = isNarrowSide();
+  const step = e.shiftKey ? 48 : 16;
+  let delta = 0;
+  if (narrow) {
+    if (e.key === 'ArrowUp') delta = step;
+    else if (e.key === 'ArrowDown') delta = -step;
+  } else {
+    if (e.key === 'ArrowLeft') delta = step;
+    else if (e.key === 'ArrowRight') delta = -step;
+  }
+  if (!delta) return;
+  e.preventDefault();
+  if (sideEl.classList.contains('collapsed')) setSideCollapsed(false);
+  if (narrow) sideH = clampSideH(currentSideH() + delta);
+  else sideW = clampSideW(sideW + delta);
+  applySideSize();
+  saveSideSize(narrow);
+});
+
+sideToggle.addEventListener('click', () => setSideCollapsed(!sideEl.classList.contains('collapsed')));
+
+// 좁은 화면에서 메시지를 입력하려고 하면 접혀 있어도 펼쳐 준다
+$('#chat-input').addEventListener('focus', () => {
+  if (sideEl.classList.contains('collapsed')) setSideCollapsed(false);
+});
+
+setSideCollapsed(localStorage.getItem(SIDE_COLLAPSED_KEY) === '1');
+applySideSize();
 
 setInterval(() => sendMsg({ type: 'ping' }), 25000);
 setUnit(unit);
