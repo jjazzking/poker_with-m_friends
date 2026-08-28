@@ -56,10 +56,18 @@
     <div class="results" id="results" hidden></div>
   </section>
 
-  <aside class="side">
+  <aside class="side" id="side">
+    <!-- 드래그해서 채팅창 크기를 바꾼다 (넓은 화면: 좌우 / 좁은 화면: 위아래) -->
+    <div class="side-resizer" id="side-resizer" role="separator" tabindex="0"
+         aria-orientation="vertical" aria-label="채팅창 크기 조절"
+         title="드래그해서 크기 조절 · 더블클릭하면 기본 크기"></div>
     <div class="side-head">
       <h3>진행 기록</h3>
-      <label class="toggle-sm"><input type="checkbox" id="auto-next" checked /> 자동 진행</label>
+      <div class="side-head-right">
+        <label class="toggle-sm"><input type="checkbox" id="auto-next" checked /> 자동 진행</label>
+        <button class="side-toggle" id="side-toggle" type="button" aria-expanded="true"
+                aria-controls="log" title="채팅창 접기/펼치기">▾</button>
+      </div>
     </div>
     <div class="log" id="log"></div>
     <form class="chat" id="chat-form">
